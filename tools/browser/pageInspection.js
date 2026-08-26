@@ -61,6 +61,64 @@ export async function waitForDomStability(page, { idleMs = 500, timeoutMs = 90_0
   }
 }
 
+// Tiene traccia in tempo reale delle richieste di rete generate dalla
+// pagina (fetch, script, immagini, ...), per sapere quando un caricamento
+// di dati è davvero terminato. Serve come complemento a waitForDomStability
+// sopra, non come sostituto: quest'ultima da sola non basta quando una
+// pagina, in attesa di un fetch (es. il caricamento di un catalogo
+// prodotti), mostra un messaggio di caricamento fisso — il DOM non cambia
+// affatto durante l'attesa, quindi risulterebbe "stabile" da subito, ben
+// prima che i dati veri siano arrivati (difetto osservato concretamente su
+// un progetto reale: la scansione catturava la sola scritta "Caricamento
+// prodotti...", zero elementi interattivi). A differenza del
+// `waitForLoadState("networkidle")` di Playwright scartato sopra (che
+// conta le CONNESSIONI di rete attive), qui si contano le singole
+// RICHIESTE tramite i loro eventi di ciclo di vita: una connessione
+// WebSocket mantenuta aperta a lungo — come quella usata dai server di
+// sviluppo per l'hot-reload — non genera questi eventi e non impedisce mai
+// di rilevare la pagina come "ferma".
+export function createNetworkIdleTracker(page) {
+  let pending = 0;
+
+  const onRequest = () => {
+    pending += 1;
+  };
+  const onSettle = () => {
+    pending = Math.max(0, pending - 1);
+  };
+
+  page.on("request", onRequest);
+  page.on("requestfinished", onSettle);
+  page.on("requestfailed", onSettle);
+
+  return {
+    stop() {
+      page.off("request", onRequest);
+      page.off("requestfinished", onSettle);
+      page.off("requestfailed", onSettle);
+    },
+    // Attende finché il numero di richieste in corso non resta a zero per
+    // almeno `idleMs` millisecondi consecutivi, fino a un massimo di
+    // `timeoutMs`: questo tetto massimo evita un'attesa indefinita su
+    // pagine che mantengono connessioni aperte a lungo (ad esempio
+    // aggiornamenti continui di dati).
+    async waitForIdle(idleMs, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      let idleSince = pending === 0 ? Date.now() : null;
+      while (Date.now() < deadline) {
+        if (pending > 0) {
+          idleSince = null;
+        } else if (idleSince === null) {
+          idleSince = Date.now();
+        } else if (Date.now() - idleSince >= idleMs) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+  };
+}
+
 // Attende che ogni immagine presente in questo momento sulla pagina abbia
 // terminato di caricarsi (con successo o con un errore), invece di
 // affidarsi solo all'assenza di richieste di rete in corso. Le due cose

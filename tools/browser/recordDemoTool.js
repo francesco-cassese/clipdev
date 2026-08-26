@@ -17,6 +17,7 @@ import path from "node:path";
 import { VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
 import { CURSOR_INIT_SCRIPT, moveMouseHumanLike, randomDelay, scrollPageSmooth, SCROLL_AMOUNT_PX } from "./humanInteraction.js";
 import {
+  createNetworkIdleTracker,
   extractInteractiveElements,
   getPageOverflowInfo,
   locateActionTarget,
@@ -126,59 +127,6 @@ export const ActionSchema = z.discriminatedUnion("type", [
     amount: z.enum(["small", "medium", "large"]).default("medium"),
   }),
 ]);
-
-// Tiene traccia in tempo reale delle richieste di rete generate dalla
-// pagina, per sapere quando un'elaborazione avviata da un'azione (ad
-// esempio un contenuto generato da un servizio esterno) è effettivamente
-// terminata. Questo approccio è più affidabile di semplicemente attendere
-// che la pagina risulti "inattiva": poiché le interazioni simulate
-// (digitazione, movimento del mouse) impiegano già di per sé qualche
-// centinaio di millisecondi, un controllo generico rischierebbe di
-// considerare la pagina già ferma anche quando una richiesta è appena
-// partita o sta per farlo. Il conteggio delle richieste in corso, avviato
-// prima dell'interazione e aggiornato in tempo reale, non soffre di questo
-// problema.
-function trackNetworkIdle(page) {
-  let pending = 0;
-
-  const onRequest = () => {
-    pending += 1;
-  };
-  const onSettle = () => {
-    pending = Math.max(0, pending - 1);
-  };
-
-  page.on("request", onRequest);
-  page.on("requestfinished", onSettle);
-  page.on("requestfailed", onSettle);
-
-  return {
-    stop() {
-      page.off("request", onRequest);
-      page.off("requestfinished", onSettle);
-      page.off("requestfailed", onSettle);
-    },
-    // Attende finché il numero di richieste in corso non resta a zero per
-    // almeno `idleMs` millisecondi consecutivi, fino a un massimo di
-    // `timeoutMs`: questo tetto massimo evita un'attesa indefinita su
-    // pagine che mantengono connessioni aperte a lungo (ad esempio
-    // aggiornamenti continui di dati).
-    async waitForIdle(idleMs, timeoutMs) {
-      const deadline = Date.now() + timeoutMs;
-      let idleSince = pending === 0 ? Date.now() : null;
-      while (Date.now() < deadline) {
-        if (pending > 0) {
-          idleSince = null;
-        } else if (idleSince === null) {
-          idleSince = Date.now();
-        } else if (Date.now() - idleSince >= idleMs) {
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    },
-  };
-}
 
 // Esegue una singola interazione sulla pagina, in base al suo tipo. Il
 // click e la digitazione in un campo non avvengono in modo istantaneo:
@@ -290,15 +238,29 @@ export async function inspectClipDevPage(rawInput) {
   try {
     const context = await browser.newContext({ viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT } });
     const page = await context.newPage();
+
+    // Il tracciamento delle richieste di rete deve partire PRIMA della
+    // navigazione: alcune pagine avviano le proprie richieste di dati
+    // (es. un fetch verso un'API) nello stesso istante in cui iniziano a
+    // caricarsi, e andrebbero perse se il tracciamento cominciasse solo
+    // dopo page.goto().
+    const networkTracker = createNetworkIdleTracker(page);
     await page.goto(url, { waitUntil: "load", timeout: 30_000 });
 
-    // Il completamento del caricamento non garantisce che l'interfaccia sia
-    // già stabile: molti siti continuano a richiedere dati subito dopo (ad
-    // esempio un'applicazione che carica i propri contenuti in modo
-    // asincrono all'avvio). Senza attendere qui che la pagina smetta di
-    // cambiare, l'elenco degli elementi qui sotto rischierebbe di essere
-    // scansionato troppo presto, prima che il vero contenuto della pagina
-    // sia comparso.
+    // Il completamento del caricamento non garantisce che i DATI della
+    // pagina siano già arrivati: un'applicazione che li richiede con un
+    // fetch al proprio avvio (ad esempio un catalogo prodotti) mostra
+    // tipicamente un messaggio di caricamento fisso, senza alcuna modifica
+    // del DOM, per tutta la durata dell'attesa — waitForDomStability da
+    // sola scambierebbe questo per "pagina già pronta" (difetto osservato
+    // concretamente: la scansione catturava solo la scritta "Caricamento
+    // prodotti...", zero elementi interattivi). Attendere prima che le
+    // richieste di rete si siano concluse intercetta anche questo caso;
+    // solo dopo ha senso verificare la stabilità del DOM, per lasciare il
+    // tempo al conseguente aggiornamento dell'interfaccia (es. il
+    // re-render dopo l'arrivo dei dati) di completarsi a sua volta.
+    await networkTracker.waitForIdle(500, RESULT_WAIT_TIMEOUT_MS);
+    networkTracker.stop();
     await waitForDomStability(page, { timeoutMs: RESULT_WAIT_TIMEOUT_MS });
 
     // Elenco reale degli elementi con cui si può interagire sulla pagina:
@@ -368,20 +330,27 @@ export async function startClipDevRecording({ browser, url }) {
     // parte del video.
     const recordingStartedAt = Date.now();
 
+    // Vedi il commento equivalente in inspectClipDevPage: il tracciamento
+    // deve partire prima della navigazione, non dopo.
+    const networkTracker = createNetworkIdleTracker(page);
+
     // Visita l'indirizzo da registrare. Grazie alla fase di analisi
     // precedente, il sito è già stato "riscaldato", quindi questo
     // caricamento risulta quasi immediato.
     await page.goto(url, { waitUntil: "load", timeout: 30_000 });
 
     // Il completamento del caricamento della pagina non garantisce che
-    // l'interfaccia sia già visivamente stabile: molti siti continuano a
-    // richiedere dati o applicare stili subito dopo, producendo un breve
-    // istante di schermo bianco o di caricamento nei primi fotogrammi del
-    // video. Attendere qui che la pagina smetta di cambiare permette, più
-    // avanti nel processo, di tagliare via questi primi istanti dal video
-    // finale, invece di limitarsi ad aspettare più a lungo (cosa che
-    // allungherebbe il video senza eliminare l'istante di caricamento già
-    // registrato).
+    // l'interfaccia sia già visivamente stabile, né che i suoi dati siano
+    // già arrivati (vedi il commento in inspectClipDevPage): molti siti
+    // continuano a richiedere dati o applicare stili subito dopo,
+    // producendo un breve istante di schermo bianco o di caricamento nei
+    // primi fotogrammi del video. Attendere qui che le richieste di rete
+    // si concludano e che la pagina smetta di cambiare permette, più avanti
+    // nel processo, di tagliare via questi primi istanti dal video finale,
+    // invece di limitarsi ad aspettare più a lungo (cosa che allungherebbe
+    // il video senza eliminare l'istante di caricamento già registrato).
+    await networkTracker.waitForIdle(500, RESULT_WAIT_TIMEOUT_MS);
+    networkTracker.stop();
     await waitForDomStability(page, { timeoutMs: RESULT_WAIT_TIMEOUT_MS });
     const pageReadyAt = Date.now();
 
@@ -444,7 +413,7 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
   // dell'esecuzione delle interazioni, non dopo: una richiesta può partire
   // nello stesso istante in cui l'ultima interazione si conclude, e deve
   // già essere osservata quando questo accade.
-  const networkTracker = trackNetworkIdle(page);
+  const networkTracker = createNetworkIdleTracker(page);
   let cutRange = null;
   try {
     // Esegue in sequenza tutte le interazioni richieste, nell'ordine in
