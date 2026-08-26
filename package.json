@@ -1,0 +1,30 @@
+{
+  "name": "clipdev",
+  "version": "1.2.0",
+  "description": "",
+  "main": "index.js",
+  "bin": {
+    "clipdev": "./bin/clipdev.js"
+  },
+  "scripts": {
+    "start": "node --env-file=.env index.js",
+    "test": "node --test"
+  },
+  "keywords": [],
+  "author": "Francesco Cassese <francescocassese9@gmail.com>",
+  "license": "ISC",
+  "dependencies": {
+    "@langchain/anthropic": "^1.5.1",
+    "langchain": "^1.5.3",
+    "playwright": "^1.62.1",
+    "zod": "^4.4.3"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.7.0",
+      "onFail": "download"
+    }
+  },
+  "type": "module"
+}
