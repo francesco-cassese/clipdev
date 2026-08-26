@@ -13,25 +13,42 @@
 import { spawn } from "node:child_process";
 
 // Converte il video WebM registrato in un file MP4 compatibile con
-// LinkedIn e con la maggior parte dei lettori video. `trimStartSeconds`
-// permette di tagliare i primi istanti del video (il breve momento di
-// schermo bianco o di caricamento catturato tra l'apertura della pagina e
-// il momento in cui è visivamente stabile), così il video finale parte
-// direttamente da un'inquadratura pulita.
-export function transcodeToMp4(inputWebmPath, outputMp4Path, trimStartSeconds = 0) {
+// LinkedIn e con la maggior parte dei lettori video. `cutRanges` è un
+// elenco di intervalli (in secondi, riferiti alla registrazione originale)
+// da escludere per intero dal video finale: il breve momento di schermo
+// bianco o di caricamento catturato tra l'apertura della pagina e il
+// momento in cui è visivamente stabile, e ogni successiva attesa del
+// risultato di un'interazione (vedi runClipDevActionBatch). È lo stesso
+// "taglio del tempo morto" usato dagli strumenti professionali di
+// registrazione demo: gli intervalli indicati smettono semplicemente di
+// esistere nel video finale, invece di essere nascosti in tempo reale
+// dietro un elemento sovrapposto alla pagina durante la registrazione.
+export function transcodeToMp4(inputWebmPath, outputMp4Path, cutRanges = []) {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn("ffmpeg", [
-      "-y", // sovrascrive il file di destinazione se esiste già, senza chiedere conferma
-      "-i", inputWebmPath,
-      "-ss", trimStartSeconds.toFixed(3),
+    const args = ["-y", "-i", inputWebmPath]; // -y: sovrascrive il file di destinazione se esiste già, senza chiedere conferma
+
+    if (cutRanges.length > 0) {
+      // "select" mantiene solo i fotogrammi che non ricadono in nessuno
+      // degli intervalli esclusi; "setpts" ricalcola poi i tempi dei
+      // fotogrammi rimasti in modo che scorrano senza vuoti né rallentamenti,
+      // come se gli intervalli tagliati non fossero mai esistiti.
+      const excludedRanges = cutRanges
+        .map(({ startSeconds, endSeconds }) => `between(t,${startSeconds.toFixed(3)},${endSeconds.toFixed(3)})`)
+        .join("+");
+      args.push("-vf", `select='not(${excludedRanges})',setpts=N/FRAME_RATE/TB`);
+    }
+
+    args.push(
       "-c:v", "libx264", // codec video supportato universalmente da lettori e piattaforme
       "-pix_fmt", "yuv420p", // formato colore richiesto per la massima compatibilità, anche su dispositivi meno recenti
       "-preset", "medium", // equilibrio ragionevole tra velocità di conversione e qualità del risultato
       "-crf", "23", // livello di qualità costante, adeguato per un video breve come questo
       "-movflags", "+faststart", // predispone il file per essere riprodotto in streaming non appena inizia il download
       "-an", // il video registrato non contiene audio, quindi nessuna traccia audio viene elaborata
-      outputMp4Path,
-    ]);
+      outputMp4Path
+    );
+
+    const ffmpeg = spawn("ffmpeg", args);
 
     // ffmpeg scrive i propri messaggi di avanzamento su questo canale per
     // normale funzionamento, non solo in caso di errore: li raccogliamo per

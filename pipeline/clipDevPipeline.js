@@ -246,13 +246,19 @@ export async function runClipDevPipeline({
 
   const cursorState = { x: 0, y: 0 };
   let hadActions = false;
+  // Intervalli di tempo morto (attese del risultato di un'interazione) da
+  // rimuovere nel montaggio finale, accumulati sia dal primo gruppo di
+  // interazioni sia da ogni eventuale turno di ripianificazione più sotto.
+  const cutRanges = [];
   try {
     const firstBatch = await runClipDevActionBatch({
       page: recordingSession.page,
       actions: resolvedActions,
       cursorState,
+      recordingStartedAt: recordingSession.recordingStartedAt,
     });
     hadActions = firstBatch.ranAnyAction;
+    cutRanges.push(...firstBatch.cutRanges);
 
     // FASE 1.7 — Ripianificazione: avviene solo se questa prima serie di
     // interazioni è stata decisa dal Director Agent (non fornita
@@ -311,11 +317,13 @@ export async function runClipDevPipeline({
             // senso proseguire.
             break;
           }
-          await runClipDevActionBatch({
+          const followUpBatch = await runClipDevActionBatch({
             page: recordingSession.page,
             actions: followUpActions,
             cursorState,
+            recordingStartedAt: recordingSession.recordingStartedAt,
           });
+          cutRanges.push(...followUpBatch.cutRanges);
           actionsSoFar = [...actionsSoFar, ...followUpActions];
         } catch (error) {
           // Un eventuale problema in questo turno (ad esempio un
@@ -353,6 +361,7 @@ export async function runClipDevPipeline({
     outputPath: `${projectSlug}/demo.mp4`,
     minDurationMs,
     hadActions,
+    cutRanges,
   });
   if (!videoResult.success) {
     throw new Error(`Registrazione video fallita: ${videoResult.error}`);

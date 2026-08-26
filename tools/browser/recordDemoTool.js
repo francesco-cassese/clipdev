@@ -16,7 +16,13 @@ import path from "node:path";
 
 import { VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
 import { CURSOR_INIT_SCRIPT, moveMouseHumanLike, randomDelay, scrollPageSmooth, SCROLL_AMOUNT_PX } from "./humanInteraction.js";
-import { extractInteractiveElements, getPageOverflowInfo, locateActionTarget, waitForDomStability } from "./pageInspection.js";
+import {
+  extractInteractiveElements,
+  getPageOverflowInfo,
+  locateActionTarget,
+  waitForDomStability,
+  waitForImagesToLoad,
+} from "./pageInspection.js";
 import { transcodeToMp4 } from "./videoTranscode.js";
 
 // Breve pausa dopo l'ultima interazione eseguita, prima di terminare la
@@ -172,43 +178,6 @@ function trackNetworkIdle(page) {
       }
     },
   };
-}
-
-// Copre l'intera pagina con un velo dello stesso colore di sfondo
-// dell'applicazione, per nascondere nel video lo stato di caricamento che
-// molti siti mostrano temporaneamente dopo un'interazione (indicatori di
-// caricamento, contenuti che compaiono uno alla volta man mano che
-// arrivano da un servizio esterno): senza questo accorgimento, quello
-// stato intermedio — spesso poco curato visivamente — finirebbe ripreso
-// nel video. Il cursore resta comunque visibile sopra il velo (il suo
-// livello di sovrapposizione, vedi CURSOR_INIT_SCRIPT in
-// tools/browser/humanInteraction.js, resta il più alto possibile), così chi guarda
-// vede comunque che il cursore è fermo in attesa, invece di un salto
-// improvviso e ingiustificato. Il colore del velo viene letto dalla pagina
-// stessa, per restare coerente sia con applicazioni a tema chiaro sia con
-// quelle a tema scuro, invece di rischiare un colore fisso che stonerebbe
-// con l'aspetto reale del sito.
-async function hideResultVeil(page) {
-  await page.evaluate(() => {
-    const ID = "__clipdev_loading_veil__";
-    if (document.getElementById(ID)) return;
-    const backgroundColor = window.getComputedStyle(document.body).backgroundColor;
-    const veil = document.createElement("div");
-    veil.id = ID;
-    veil.style.cssText =
-      "position:fixed;inset:0;z-index:2147483646;" +
-      "background-color:" + (backgroundColor && backgroundColor !== "rgba(0, 0, 0, 0)" ? backgroundColor : "#ffffff") + ";";
-    document.documentElement.appendChild(veil);
-  });
-}
-
-// Rimuove il velo inserito da hideResultVeil, rivelando il contenuto ormai
-// pronto. Non genera errore se il velo non è presente (ad esempio se
-// un'interazione non ha mai innescato alcuna richiesta di rete).
-async function revealResultVeil(page) {
-  await page.evaluate(() => {
-    document.getElementById("__clipdev_loading_veil__")?.remove();
-  });
 }
 
 // Esegue una singola interazione sulla pagina, in base al suo tipo. Il
@@ -458,12 +427,17 @@ export async function abortClipDevRecording(session) {
 // invece di dover terminare subito la registrazione dopo il primo gruppo.
 // La posizione del cursore visibile viene mantenuta tra una chiamata e
 // l'altra, così ogni nuovo movimento continua da dove si trovava
-// precedentemente, senza salti innaturali nel video.
-export async function runClipDevActionBatch({ page, actions = [], cursorState = { x: 0, y: 0 } }) {
+// precedentemente, senza salti innaturali nel video. `recordingStartedAt`
+// (l'istante di inizio dell'intera registrazione, vedi
+// startClipDevRecording) permette di esprimere l'intervallo di attesa
+// restituito da questa funzione in secondi relativi al video finale,
+// invece che in orario assoluto: è quel valore che verrà poi tagliato via
+// dal montaggio finale (vedi finalizeClipDevRecording).
+export async function runClipDevActionBatch({ page, actions = [], cursorState = { x: 0, y: 0 }, recordingStartedAt }) {
   const parsedActions = z.array(ActionSchema).max(20).parse(actions);
 
   if (parsedActions.length === 0) {
-    return { cursorState, ranAnyAction: false };
+    return { cursorState, ranAnyAction: false, cutRanges: [] };
   }
 
   // Il conteggio delle richieste di rete in corso viene avviato prima
@@ -471,6 +445,7 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
   // nello stesso istante in cui l'ultima interazione si conclude, e deve
   // già essere osservata quando questo accade.
   const networkTracker = trackNetworkIdle(page);
+  let cutRange = null;
   try {
     // Esegue in sequenza tutte le interazioni richieste, nell'ordine in
     // cui sono state fornite: è questa la sequenza che finisce ripresa nel
@@ -489,22 +464,36 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
     // indefinitamente la registrazione su pagine che restano a lungo in
     // comunicazione con il server.
     //
-    // Durante questa attesa la pagina viene coperta da un velo (vedi
-    // hideResultVeil sopra): se il caricamento del risultato produce uno
-    // stato intermedio poco curato (contenuti che compaiono uno alla volta,
-    // indicatori di caricamento), quello stato non viene mostrato nel
-    // video — solo il salto pulito dall'attesa al risultato pronto.
-    await hideResultVeil(page);
-    try {
-      await networkTracker.waitForIdle(500, RESULT_WAIT_TIMEOUT_MS);
-    } finally {
-      await revealResultVeil(page);
+    // Questo intervallo di attesa viene registrato (in secondi relativi
+    // all'inizio del video) invece di essere nascosto dal vivo con un
+    // elemento sovrapposto alla pagina: se il caricamento del risultato
+    // produce uno stato intermedio poco curato (contenuti che compaiono uno
+    // alla volta, indicatori di caricamento), quello stato viene tagliato
+    // via per intero nel montaggio finale (vedi finalizeClipDevRecording),
+    // non semplicemente coperto. È lo stesso principio usato dagli
+    // strumenti professionali di registrazione demo ("taglio del tempo
+    // morto"): un'esclusione decisa in fase di montaggio è sempre esatta,
+    // mentre un velo sovrapposto in tempo reale deve indovinare un colore e
+    // un tempismo che possono non corrispondere all'aspetto reale del sito.
+    const waitStartedAt = Date.now();
+    await networkTracker.waitForIdle(500, RESULT_WAIT_TIMEOUT_MS);
+    // La sola assenza di richieste di rete in corso non garantisce che le
+    // immagini già richieste abbiano finito di comparire (vedi il commento
+    // di waitForImagesToLoad in tools/browser/pageInspection.js): questa
+    // attesa aggiuntiva viene inclusa nello stesso intervallo tagliato via.
+    await waitForImagesToLoad(page);
+    const waitEndedAt = Date.now();
+    if (recordingStartedAt) {
+      cutRange = {
+        startSeconds: (waitStartedAt - recordingStartedAt) / 1000,
+        endSeconds: (waitEndedAt - recordingStartedAt) / 1000,
+      };
     }
   } finally {
     networkTracker.stop();
   }
 
-  return { cursorState, ranAnyAction: true };
+  return { cursorState, ranAnyAction: true, cutRanges: cutRange ? [cutRange] : [] };
 }
 
 // Completa una registrazione già avvenuta (interazioni comprese):
@@ -528,6 +517,11 @@ export async function finalizeClipDevRecording({
   outputPath,
   minDurationMs = 5_000,
   hadActions = false,
+  // Intervalli di "tempo morto" (in secondi relativi all'inizio del
+  // video) accumulati durante l'esecuzione delle interazioni — vedi
+  // runClipDevActionBatch — da rimuovere dal video insieme al taglio dei
+  // primissimi istanti calcolato più sotto.
+  cutRanges = [],
 }) {
   try {
     // I parametri ricevuti dall'esterno vengono controllati anche qui,
@@ -581,14 +575,20 @@ export async function finalizeClipDevRecording({
       rawWebmPath = await video.path();
     }
 
-    // Calcola quanto tempo va tagliato dall'inizio del video: il periodo
-    // tra l'avvio della registrazione e il momento in cui la pagina è
-    // risultata visivamente stabile, ovvero il breve istante di
-    // caricamento che altrimenti aprirebbe ogni video.
+    // Il periodo tra l'avvio della registrazione e il momento in cui la
+    // pagina è risultata visivamente stabile (il breve istante di
+    // caricamento che altrimenti aprirebbe ogni video) è, in tutto e per
+    // tutto, un altro intervallo di tempo morto da escludere: viene quindi
+    // trattato come il primo di una lista che comprende anche le attese
+    // già raccolte durante le interazioni, invece di essere gestito con un
+    // meccanismo separato.
     const trimStartSeconds = Math.max(0, (pageReadyAt - recordingStartedAt) / 1000);
+    const allCutRanges =
+      trimStartSeconds > 0 ? [{ startSeconds: 0, endSeconds: trimStartSeconds }, ...cutRanges] : cutRanges;
 
-    // Converte il file video nel formato finale, nel percorso richiesto.
-    await transcodeToMp4(rawWebmPath, resolvedOutputPath, trimStartSeconds);
+    // Converte il file video nel formato finale, nel percorso richiesto,
+    // rimuovendo per intero gli intervalli di tempo morto individuati.
+    await transcodeToMp4(rawWebmPath, resolvedOutputPath, allCutRanges);
 
     // Il file intermedio non serve più una volta ottenuto il file finale:
     // viene rimosso per non lasciare file temporanei accumulati.

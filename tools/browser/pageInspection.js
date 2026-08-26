@@ -61,6 +61,43 @@ export async function waitForDomStability(page, { idleMs = 500, timeoutMs = 90_0
   }
 }
 
+// Attende che ogni immagine presente in questo momento sulla pagina abbia
+// terminato di caricarsi (con successo o con un errore), invece di
+// affidarsi solo all'assenza di richieste di rete in corso. Le due cose
+// non sempre coincidono: quando una pagina mostra molte immagini caricate
+// da un servizio esterno, queste arrivano spesso in modo scaglionato, con
+// piccole pause tra l'una e l'altra — pause che l'osservazione della sola
+// rete può scambiare per "pagina ferma", facendo terminare l'attesa prima
+// che tutte le immagini siano davvero comparse (il difetto concretamente
+// osservato: le immagini compaiono a scatti, una alla volta, invece che
+// tutte insieme). Un tempo massimo di attesa evita comunque un blocco
+// indefinito se un'immagine non termina mai di caricarsi.
+export async function waitForImagesToLoad(page, timeoutMs = 15_000) {
+  try {
+    await page.evaluate(
+      (timeoutMs) =>
+        Promise.race([
+          Promise.all(
+            Array.from(document.images)
+              .filter((img) => !img.complete)
+              .map(
+                (img) =>
+                  new Promise((resolve) => {
+                    img.addEventListener("load", resolve, { once: true });
+                    img.addEventListener("error", resolve, { once: true });
+                  })
+              )
+          ),
+          new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+        ]),
+      timeoutMs
+    );
+  } catch {
+    // Vedi il commento in waitForDomStability: un'attesa accessoria che
+    // fallisce non deve bloccare il resto del processo.
+  }
+}
+
 // Individua sulla pagina il punto centrale di un elemento identificato da
 // un selettore, dopo essersi assicurato che sia visibile nello schermo.
 // Serve sia per i click sia per la digitazione nei campi di testo (vedi
