@@ -127,45 +127,73 @@ export async function locateActionTarget(page, selector) {
   };
 }
 
-// Espressione che riconosce solo caratteri sicuri (lettere, numeri,
-// trattini) da usare all'interno di un identificatore della pagina: serve
-// a evitare che un identificatore contenente caratteri particolari possa
-// alterare il significato del selettore costruito con esso.
-const SAFE_ATTR_VALUE = /^[a-zA-Z0-9_-]+$/;
+// Ruoli di accessibilità che rappresentano di per sé un controllo con cui
+// si può interagire (bottoni, link, campi, caselle, interruttori, ...):
+// sono gli stessi ruoli che uno screen reader annuncia come "attivabili".
+// Un elemento con uno di questi ruoli viene sempre incluso, a prescindere
+// da come è stato costruito (tag nativo come <button>, oppure un
+// componente custom con l'attributo role corretto).
+const INTERACTIVE_ROLES = new Set([
+  "button",
+  "link",
+  "textbox",
+  "searchbox",
+  "checkbox",
+  "radio",
+  "switch",
+  "combobox",
+  "menuitem",
+  "option",
+  "tab",
+  "spinbutton",
+  "slider",
+]);
 
-// Rende sicuro l'uso di un testo dentro un selettore che richiede
-// virgolette, sostituendo i caratteri che altrimenti interromperebbero la
-// stringa.
-function escapeForQuotedSelector(value) {
-  return value.replace(/["\\]/g, "\\$&");
-}
+// Analizza ogni riga dell'istantanea di accessibilità (vedi
+// extractInteractiveElements più sotto) ed estrae solo gli elementi
+// realmente utilizzabili: quelli con un ruolo riconosciuto come
+// interattivo, oppure — per coprire anche i controlli custom senza un
+// ruolo ARIA esplicito (una card cliccabile, una voce di menu fatta con
+// un semplice <div>) — quelli che il motore di accessibilità del browser
+// segnala esplicitamente come cliccabili tramite `[cursor=pointer]`. Gli
+// elementi disabilitati vengono sempre esclusi: non avrebbe senso
+// proporli come interazione. Esportata (oltre che usata internamente) per
+// poter essere verificata da test automatici mirati, senza dover aprire
+// un browser reale solo per controllare la logica di selezione.
+const SNAPSHOT_LINE_PATTERN = /-\s+([\w-]+)(?:\s+"([^"]*)")?((?:\s*\[[^\]]*\])*)(?::\s*(.*))?\s*$/;
 
-// Costruisce, a partire da un elemento individuato sulla pagina, un modo
-// affidabile per farvi riferimento in seguito. Ordine di preferenza: prima
-// un identificativo univoco dell'elemento (se presente e sicuro da usare),
-// poi un'etichetta descrittiva pensata per l'accessibilità, poi il ruolo
-// dell'elemento combinato con il suo testo, infine il solo testo visibile.
-// Se nessuna di queste informazioni è utilizzabile con sicurezza, restituisce
-// "nessun riferimento disponibile": in quel caso l'elemento viene scartato
-// dalla lista piuttosto che essere referenziato in un modo che potrebbe
-// risultare ambiguo o errato.
-function buildSelector(el) {
-  if (el.id && SAFE_ATTR_VALUE.test(el.id)) {
-    return `#${el.id}`;
+export function parseInteractiveElementsFromSnapshot(snapshot) {
+  const elements = [];
+  for (const rawLine of snapshot.split("\n")) {
+    const match = rawLine.match(SNAPSHOT_LINE_PATTERN);
+    if (!match) continue;
+    const [, role, quotedName, attrsBlock, trailingText] = match;
+
+    const refMatch = attrsBlock.match(/\[ref=([\w-]+)\]/);
+    if (!refMatch) continue; // nessun riferimento utilizzabile per interagirci
+
+    if (/\[disabled\]/.test(attrsBlock)) continue;
+
+    const isPointerCursor = /\[cursor=pointer\]/.test(attrsBlock);
+    if (!INTERACTIVE_ROLES.has(role) && !isPointerCursor) continue;
+
+    const label = (quotedName || trailingText || role).trim().slice(0, 60) || role;
+
+    elements.push({
+      // Il riferimento dell'istantanea di accessibilità (aria-ref=...) è
+      // già un selettore Playwright valido e univoco: a differenza di un
+      // selettore costruito a mano da id/aria-label/testo, funziona anche
+      // per elementi dentro una Shadow DOM aperta, che l'albero di
+      // accessibilità attraversa automaticamente.
+      selector: `aria-ref=${refMatch[1]}`,
+      tag: role,
+      // Etichetta descrittiva pensata per essere letta e compresa
+      // dall'agente che sceglie le interazioni, separata dal riferimento
+      // tecnico usato per raggiungere l'elemento.
+      label,
+    });
   }
-  if (el.dataTestId && SAFE_ATTR_VALUE.test(el.dataTestId)) {
-    return `[data-testid="${el.dataTestId}"]`;
-  }
-  if (el.ariaLabel) {
-    return `[aria-label="${escapeForQuotedSelector(el.ariaLabel)}"]`;
-  }
-  if (el.role && el.text) {
-    return `role=${el.role}[name="${escapeForQuotedSelector(el.text)}"]`;
-  }
-  if (el.text) {
-    return `text="${escapeForQuotedSelector(el.text)}"`;
-  }
-  return null;
+  return elements.slice(0, 30);
 }
 
 // Analizza la pagina reale ed estrae l'elenco degli elementi visibili con
@@ -174,53 +202,21 @@ function buildSelector(el) {
 // all'agente che sceglie le interazioni (ai/agents/directorAgent.js) di
 // basarsi su ciò che esiste realmente sulla pagina, invece di indovinare
 // elementi che potrebbero non corrispondere a nulla di reale.
+//
+// A differenza di una scansione manuale del DOM (che riconoscerebbe solo
+// gli elementi costruiti in un modo previsto in anticipo — tag noti,
+// attributi noti), questa usa l'istantanea di accessibilità di Playwright
+// ("mode: ai"): lo stesso identico albero che consulta uno screen reader
+// per capire cosa sia davvero interattivo su una pagina. Questo risolve il
+// limite più concreto osservato: su progetti che usano componenti custom
+// (Web Components con Shadow DOM, card cliccabili senza un vero <button>),
+// una scansione basata solo su tag/attributi HTML non trova nulla, perché
+// quegli elementi non esistono nel DOM "piatto" interrogabile da
+// document.querySelectorAll — mentre l'albero di accessibilità li espone
+// comunque, avendoli già risolti per conto proprio.
 export async function extractInteractiveElements(page) {
-  // Questa parte di codice viene eseguita direttamente dentro la pagina
-  // web (nel browser), non nel programma Node: per questo ha accesso al
-  // contenuto della pagina, ma non alle altre variabili di questo file. Il
-  // riferimento finale per ogni elemento (buildSelector) viene invece
-  // costruito fuori, lato programma, dove le regole di sicurezza sono
-  // definite una volta sola.
-  const rawElements = await page.evaluate(() => {
-    const SELECTOR =
-      'button, a[href], input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [onclick]';
-    return Array.from(document.querySelectorAll(SELECTOR))
-      .filter((el) => {
-        // Scarta gli elementi non visibili: non avrebbe senso mostrarli in
-        // un video né sarebbe possibile interagirci.
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-      })
-      .slice(0, 40) // limite di sicurezza per pagine molto ricche di elementi
-      .map((el) => ({
-        tag: el.tagName.toLowerCase(),
-        type: el.getAttribute("type") || undefined,
-        id: el.id || undefined,
-        dataTestId: el.getAttribute("data-testid") || undefined,
-        role: el.getAttribute("role") || undefined,
-        ariaLabel: el.getAttribute("aria-label") || undefined,
-        placeholder: el.getAttribute("placeholder") || undefined,
-        text: (el.innerText || el.value || "").trim().slice(0, 60) || undefined,
-      }));
-  });
-
-  // Il riferimento finale per ogni elemento viene calcolato qui, e gli
-  // elementi per cui non è stato possibile costruirne uno affidabile
-  // vengono scartati: è preferibile un elenco più corto ma sicuro rispetto
-  // a uno completo ma con riferimenti poco affidabili.
-  return rawElements
-    .map((el) => ({
-      selector: buildSelector(el),
-      tag: el.tag,
-      type: el.type,
-      // Etichetta descrittiva pensata per essere letta e compresa
-      // dall'agente che sceglie le interazioni, separata dal riferimento
-      // tecnico usato per raggiungere l'elemento.
-      label: el.text || el.ariaLabel || el.placeholder || el.tag,
-    }))
-    .filter((el) => el.selector !== null)
-    .slice(0, 30);
+  const snapshot = await page.ariaSnapshot({ mode: "ai", timeout: 15_000 });
+  return parseInteractiveElementsFromSnapshot(snapshot);
 }
 
 // Misura quanto contenuto della pagina resta fuori dalla parte
