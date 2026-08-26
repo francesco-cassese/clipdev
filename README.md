@@ -178,7 +178,9 @@ tests/                       Test automatici (node --test) sulla logica pura e
 
 **"ffmpeg non è stato trovato nel PATH di sistema"** — ffmpeg non è installato, o non è raggiungibile da riga di comando. Installalo e riavvia il terminale.
 
-**"Impossibile indovinare l'URL del dev server"** (solo con `clipdev` globale) — Il framework usato dal progetto non è tra quelli riconosciuti automaticamente. Specifica l'indirizzo esplicitamente con `--url`.
+**"Impossibile indovinare l'URL del dev server"** (solo con `clipdev` globale) — Il framework usato dal progetto non è tra quelli riconosciuti automaticamente, e nessuno script (`dev`/`start`) dichiara esplicitamente una porta (`--port`). Specifica l'indirizzo esplicitamente con `--url`.
+
+**"Impossibile raggiungere http://localhost:PORTA"** (solo con `clipdev` globale) — L'indirizzo rilevato (o passato con `--url`) non risponde. Assicurati che il server di sviluppo del progetto sia già avviato prima di lanciare `clipdev`, oppure correggi la porta.
 
 **Il video non contiene interazioni, solo la pagina ferma** — Può succedere se la pagina non ha elementi interattivi visibili al momento della registrazione (ad esempio se il contenuto è ancora in caricamento, o si trova dietro un `canvas`/`iframe`). Il log della console indica quanti elementi sono stati rilevati sulla pagina.
 

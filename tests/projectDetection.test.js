@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseFlags, guessDevServerUrl } from "../tools/projectDetection.js";
+import { parseFlags, guessDevServerUrl, guessPortFromScripts } from "../tools/projectDetection.js";
 
 test("parseFlags legge coppie --nome=valore", () => {
   const flags = parseFlags(["--name=Il Mio Progetto", "--url=http://localhost:5173"]);
@@ -43,4 +43,35 @@ test("guessDevServerUrl riconosce Vite tra le dependencies", () => {
 test("guessDevServerUrl riconosce Next.js anche tra le devDependencies", () => {
   const pkg = { devDependencies: { next: "^14.0.0" } };
   assert.equal(guessDevServerUrl(pkg), "http://localhost:3000");
+});
+
+test("guessDevServerUrl riconosce Astro, Gatsby e Parcel", () => {
+  assert.equal(guessDevServerUrl({ dependencies: { astro: "^4.0.0" } }), "http://localhost:4321");
+  assert.equal(guessDevServerUrl({ dependencies: { gatsby: "^5.0.0" } }), "http://localhost:8000");
+  assert.equal(guessDevServerUrl({ devDependencies: { parcel: "^2.0.0" } }), "http://localhost:1234");
+});
+
+test("guessPortFromScripts legge --port dallo script dev", () => {
+  const pkg = { scripts: { dev: "vite --port 5174" } };
+  assert.equal(guessPortFromScripts(pkg), 5174);
+});
+
+test("guessPortFromScripts legge -p con segno uguale dallo script start", () => {
+  const pkg = { scripts: { start: "next start -p=4001" } };
+  assert.equal(guessPortFromScripts(pkg), 4001);
+});
+
+test("guessPortFromScripts restituisce null senza porta esplicita né script", () => {
+  assert.equal(guessPortFromScripts({}), null);
+  assert.equal(guessPortFromScripts({ scripts: { dev: "vite" } }), null);
+});
+
+test("guessDevServerUrl preferisce la porta esplicita dello script al default del framework", () => {
+  const pkg = { dependencies: { next: "^14.0.0" }, scripts: { dev: "next dev -p 4000" } };
+  assert.equal(guessDevServerUrl(pkg), "http://localhost:4000");
+});
+
+test("guessDevServerUrl usa la porta esplicita anche senza un framework noto tra le dipendenze", () => {
+  const pkg = { dependencies: { lodash: "^4.0.0" }, scripts: { dev: "node server.js --port=9090" } };
+  assert.equal(guessDevServerUrl(pkg), "http://localhost:9090");
 });

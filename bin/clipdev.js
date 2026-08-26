@@ -156,11 +156,39 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
+// --- Verifica che il server di sviluppo sia realmente raggiungibile --------
+// Un URL sbagliato (indovinato male dalle dipendenze, oppure passato a mano
+// ma non ancora avviato) altrimenti verrebbe scoperto solo molto più avanti
+// nel processo, dentro Playwright, con un errore di timeout più difficile
+// da collegare alla causa reale — dopo che gli agenti IA hanno già girato.
+// Verificarlo qui, prima di caricare il resto della pipeline, rende
+// l'errore immediato ed esplicito. Non interessa la risposta ottenuta (va
+// bene anche un errore HTTP): significa comunque che qualcosa sta
+// rispondendo su quell'indirizzo.
+async function isDevServerReachable(targetUrl) {
+  try {
+    await fetch(targetUrl, { signal: AbortSignal.timeout(5000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (!(await isDevServerReachable(url))) {
+  console.error(
+    `Impossibile raggiungere ${url}${urlWasGuessed ? " (porta indovinata dalle dipendenze/script del progetto)" : ""}.\n` +
+      "Assicurati che il server di sviluppo del progetto sia già in esecuzione prima di lanciare clipdev" +
+      (urlWasGuessed ? ', oppure specifica la porta corretta con --url="http://localhost:PORTA".' : ".")
+  );
+  process.exit(1);
+}
+
 // Il resto del programma viene caricato solo ora, dopo il controllo sulla
-// chiave. Il percorso di importazione è relativo alla posizione di questo
-// file (dentro l'installazione di ClipDev), non alla cartella del progetto
-// target: per questo funziona correttamente indipendentemente da dove
-// viene lanciato il comando `clipdev`.
+// chiave e sulla raggiungibilità del server. Il percorso di importazione è
+// relativo alla posizione di questo file (dentro l'installazione di
+// ClipDev), non alla cartella del progetto target: per questo funziona
+// correttamente indipendentemente da dove viene lanciato il comando
+// `clipdev`.
 const { runClipDevPipeline } = await import("../pipeline/clipDevPipeline.js");
 
 // `--headless=false` permette di vedere il browser durante la
