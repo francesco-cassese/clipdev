@@ -220,6 +220,13 @@ const INTERACTIVE_ROLES = new Set([
 // un browser reale solo per controllare la logica di selezione.
 const SNAPSHOT_LINE_PATTERN = /-\s+([\w-]+)(?:\s+"([^"]*)")?((?:\s*\[[^\]]*\])*)(?::\s*(.*))?\s*$/;
 
+// Rende sicuro l'uso di un testo dentro un selettore che richiede
+// virgolette, sostituendo i caratteri che altrimenti interromperebbero la
+// stringa.
+function escapeForQuotedSelector(value) {
+  return value.replace(/["\\]/g, "\\$&");
+}
+
 export function parseInteractiveElementsFromSnapshot(snapshot) {
   const elements = [];
   for (const rawLine of snapshot.split("\n")) {
@@ -227,23 +234,54 @@ export function parseInteractiveElementsFromSnapshot(snapshot) {
     if (!match) continue;
     const [, role, quotedName, attrsBlock, trailingText] = match;
 
-    const refMatch = attrsBlock.match(/\[ref=([\w-]+)\]/);
-    if (!refMatch) continue; // nessun riferimento utilizzabile per interagirci
+    // La presenza di un riferimento (aria-ref=...) è usata solo per capire
+    // se questa riga descrive un elemento concreto della pagina (non un
+    // nodo puramente strutturale/testuale): il riferimento in sé NON viene
+    // usato come selettore finale, perché è valido solo all'interno della
+    // stessa istantanea/pagina in cui è stato generato. La registrazione
+    // vera e propria avviene però su una pagina Playwright diversa da
+    // quella usata qui per l'ispezione (un nuovo browser context, richiesto
+    // da Playwright per attivare la registrazione video): su quella pagina
+    // il riferimento non esiste più, e un selettore basato su di esso
+    // fallirebbe con un timeout (difetto osservato concretamente). Un
+    // selettore per ruolo+nome accessibile o per testo, invece, viene
+    // ricalcolato dal vivo ogni volta che è usato, quindi resta valido su
+    // qualunque pagina mostri lo stesso contenuto.
+    if (!attrsBlock.includes("[ref=")) continue;
 
     if (/\[disabled\]/.test(attrsBlock)) continue;
 
     const isPointerCursor = /\[cursor=pointer\]/.test(attrsBlock);
     if (!INTERACTIVE_ROLES.has(role) && !isPointerCursor) continue;
 
-    const label = (quotedName || trailingText || role).trim().slice(0, 60) || role;
+    const name = (quotedName || trailingText || "").trim().slice(0, 60);
+    const label = name || role;
+
+    let selector;
+    if (INTERACTIVE_ROLES.has(role) && name) {
+      // Selettore per ruolo ARIA + nome accessibile: il modo più preciso e
+      // portabile di indirizzare un controllo standard (bottone, link,
+      // campo, ...), a prescindere da come è stato costruito nel markup.
+      selector = `role=${role}[name="${escapeForQuotedSelector(name)}"]`;
+    } else if (INTERACTIVE_ROLES.has(role)) {
+      // Nessun nome accessibile disponibile (es. una casella di controllo
+      // senza etichetta collegata): resta comunque utilizzabile per ruolo,
+      // anche se meno preciso in presenza di più elementi con lo stesso
+      // ruolo.
+      selector = `role=${role}`;
+    } else if (name) {
+      // Elemento senza un vero ruolo ARIA (una card o una voce di menu
+      // cliccabile realizzata con un semplice <div>, individuata solo
+      // grazie al cursore a puntatore): il motore "role=" di Playwright non
+      // calcola un nome accessibile per il ruolo generico, quindi qui
+      // serve un selettore basato sul testo visibile.
+      selector = `text="${escapeForQuotedSelector(name)}"`;
+    } else {
+      continue; // nessun modo affidabile e portabile di indirizzare l'elemento
+    }
 
     elements.push({
-      // Il riferimento dell'istantanea di accessibilità (aria-ref=...) è
-      // già un selettore Playwright valido e univoco: a differenza di un
-      // selettore costruito a mano da id/aria-label/testo, funziona anche
-      // per elementi dentro una Shadow DOM aperta, che l'albero di
-      // accessibilità attraversa automaticamente.
-      selector: `aria-ref=${refMatch[1]}`,
+      selector,
       tag: role,
       // Etichetta descrittiva pensata per essere letta e compresa
       // dall'agente che sceglie le interazioni, separata dal riferimento
