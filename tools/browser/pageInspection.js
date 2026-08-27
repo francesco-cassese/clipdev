@@ -227,10 +227,54 @@ function escapeForQuotedSelector(value) {
   return value.replace(/["\\]/g, "\\$&");
 }
 
+// Livello di indentazione di una riga dell'istantanea (numero di spazi
+// prima del trattino): usato per capire quali righe successive sono
+// discendenti di un dato elemento (indentazione maggiore) rispetto a
+// quando si esce dal suo sotto-albero (indentazione uguale o minore).
+function lineIndent(rawLine) {
+  const match = rawLine.match(/^(\s*)-/);
+  return match ? match[1].length : -1;
+}
+
+const URL_LINE_PATTERN = /-\s+\/url:\s*"?([^"\n]+?)"?\s*$/;
+
+// Un link può avere nome accessibile vuoto anche quando contiene testo
+// visibile perfettamente leggibile: caso reale osservato su una card
+// prodotto fatta da <Link><h5>Titolo</h5><img alt="Titolo" /></Link>, dove
+// titolo e alt restano "di proprietà" dei nodi figli (esposti come tali
+// nell'istantanea) invece di comporre il nome del link che li contiene. Un
+// selettore `role=link` da solo, in quel caso, non distinguerebbe QUESTO
+// link specifico da nessun altro link della pagina. Per un link questo è
+// comunque risolvibile: espone sempre l'indirizzo di destinazione come riga
+// figlia ("/url: ..."), che è già di per sé un riferimento univoco e
+// portabile. Il nome del primo discendente con un nome accessibile proprio
+// (tipicamente il titolo) viene recuperato solo come etichetta descrittiva
+// per l'agente, non per il selettore.
+function findLinkFallback(lines, index) {
+  const parentIndent = lineIndent(lines[index]);
+  let href = null;
+  let childName = null;
+  for (let j = index + 1; j < lines.length; j += 1) {
+    const indent = lineIndent(lines[j]);
+    if (indent === -1) continue;
+    if (indent <= parentIndent) break; // uscito dal sotto-albero di questo link
+    if (href === null) {
+      const urlMatch = lines[j].match(URL_LINE_PATTERN);
+      if (urlMatch) href = urlMatch[1].trim();
+    }
+    if (childName === null) {
+      const childMatch = lines[j].match(SNAPSHOT_LINE_PATTERN);
+      if (childMatch && childMatch[2]) childName = childMatch[2].trim().slice(0, 60);
+    }
+  }
+  return { href, childName };
+}
+
 export function parseInteractiveElementsFromSnapshot(snapshot) {
+  const lines = snapshot.split("\n");
   const elements = [];
-  for (const rawLine of snapshot.split("\n")) {
-    const match = rawLine.match(SNAPSHOT_LINE_PATTERN);
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(SNAPSHOT_LINE_PATTERN);
     if (!match) continue;
     const [, role, quotedName, attrsBlock, trailingText] = match;
 
@@ -244,9 +288,9 @@ export function parseInteractiveElementsFromSnapshot(snapshot) {
     // da Playwright per attivare la registrazione video): su quella pagina
     // il riferimento non esiste più, e un selettore basato su di esso
     // fallirebbe con un timeout (difetto osservato concretamente). Un
-    // selettore per ruolo+nome accessibile o per testo, invece, viene
-    // ricalcolato dal vivo ogni volta che è usato, quindi resta valido su
-    // qualunque pagina mostri lo stesso contenuto.
+    // selettore per ruolo+nome accessibile, per testo o per indirizzo,
+    // invece, viene ricalcolato dal vivo ogni volta che è usato, quindi
+    // resta valido su qualunque pagina mostri lo stesso contenuto.
     if (!attrsBlock.includes("[ref=")) continue;
 
     if (/\[disabled\]/.test(attrsBlock)) continue;
@@ -254,31 +298,42 @@ export function parseInteractiveElementsFromSnapshot(snapshot) {
     const isPointerCursor = /\[cursor=pointer\]/.test(attrsBlock);
     if (!INTERACTIVE_ROLES.has(role) && !isPointerCursor) continue;
 
-    const name = (quotedName || trailingText || "").trim().slice(0, 60);
-    const label = name || role;
+    let name = (quotedName || trailingText || "").trim().slice(0, 60);
+    let label = name || role;
 
     let selector;
-    if (INTERACTIVE_ROLES.has(role) && name) {
+    if (role === "link" && !name) {
+      // Vedi findLinkFallback sopra: un link senza nome accessibile
+      // proprio resta comunque indirizzabile in modo univoco tramite il
+      // suo indirizzo di destinazione.
+      const { href, childName } = findLinkFallback(lines, i);
+      if (href) {
+        selector = `a[href="${escapeForQuotedSelector(href)}"]`;
+        label = childName || href;
+      }
+    }
+
+    if (!selector && INTERACTIVE_ROLES.has(role) && name) {
       // Selettore per ruolo ARIA + nome accessibile: il modo più preciso e
       // portabile di indirizzare un controllo standard (bottone, link,
       // campo, ...), a prescindere da come è stato costruito nel markup.
       selector = `role=${role}[name="${escapeForQuotedSelector(name)}"]`;
-    } else if (INTERACTIVE_ROLES.has(role)) {
-      // Nessun nome accessibile disponibile (es. una casella di controllo
-      // senza etichetta collegata): resta comunque utilizzabile per ruolo,
-      // anche se meno preciso in presenza di più elementi con lo stesso
-      // ruolo.
+    } else if (!selector && INTERACTIVE_ROLES.has(role)) {
+      // Nessun nome accessibile disponibile e nessun indirizzo utilizzabile
+      // (es. una casella di controllo senza etichetta collegata): resta
+      // comunque utilizzabile per ruolo, anche se meno preciso in presenza
+      // di più elementi con lo stesso ruolo.
       selector = `role=${role}`;
-    } else if (name) {
+    } else if (!selector && name) {
       // Elemento senza un vero ruolo ARIA (una card o una voce di menu
       // cliccabile realizzata con un semplice <div>, individuata solo
       // grazie al cursore a puntatore): il motore "role=" di Playwright non
       // calcola un nome accessibile per il ruolo generico, quindi qui
       // serve un selettore basato sul testo visibile.
       selector = `text="${escapeForQuotedSelector(name)}"`;
-    } else {
-      continue; // nessun modo affidabile e portabile di indirizzare l'elemento
     }
+
+    if (!selector) continue; // nessun modo affidabile e portabile di indirizzare l'elemento
 
     elements.push({
       selector,

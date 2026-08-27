@@ -87,6 +87,35 @@ test("mette tra virgolette al sicuro un testo che contiene virgolette doppie", (
   assert.equal(elements[0].selector, 'text="Scrivi \\"ciao\\" a tutti"');
 });
 
+test("un link senza nome accessibile proprio usa l'indirizzo di destinazione come selettore e il nome di un figlio come etichetta", () => {
+  // Caso reale: <Link><h5>Titolo</h5><img alt="Titolo" /></Link>, dove il
+  // link stesso non eredita un nome accessibile dai figli.
+  const snapshot = [
+    `- list [ref=e1]:`,
+    `  - listitem [ref=e2]:`,
+    `    - link [ref=e3] [cursor=pointer]:`,
+    `      - /url: /prodotti/1`,
+    `      - generic [ref=e4]:`,
+    `        - heading "Fjallraven - Foldsack No. 1 Backpack" [level=5] [ref=e5]`,
+    `        - img "Fjallraven - Foldsack No. 1 Backpack" [ref=e6]`,
+    `  - listitem [ref=e7]:`,
+    `    - link [ref=e8] [cursor=pointer]:`,
+    `      - /url: /prodotti/2`,
+    `      - generic [ref=e9]:`,
+    `        - heading "Zainetto casual" [level=5] [ref=e10]`,
+  ].join("\n");
+  const elements = parseInteractiveElementsFromSnapshot(snapshot);
+  assert.deepEqual(elements, [
+    { selector: 'a[href="/prodotti/1"]', tag: "link", label: "Fjallraven - Foldsack No. 1 Backpack" },
+    { selector: 'a[href="/prodotti/2"]', tag: "link", label: "Zainetto casual" },
+  ]);
+});
+
+test("un link senza nome accessibile e senza indirizzo di destinazione ripiega sul solo ruolo come selettore", () => {
+  const snapshot = [`- link [ref=e3] [cursor=pointer]:`, `  - generic [ref=e4]: contenuto senza testo diretto`].join("\n");
+  assert.deepEqual(parseInteractiveElementsFromSnapshot(snapshot), [{ selector: "role=link", tag: "link", label: "link" }]);
+});
+
 test("limita il risultato a 30 elementi", () => {
   const lines = Array.from({ length: 40 }, (_, i) => `- button "Bottone ${i}" [ref=e${i}]`);
   const elements = parseInteractiveElementsFromSnapshot(lines.join("\n"));
