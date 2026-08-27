@@ -14,6 +14,14 @@ Per ogni esecuzione, ClipDev crea tre file:
 | `demo.mp4` | Il video della demo, Full HD (1920×1080), con cursore visibile e interazioni realistiche, ottimizzato per la durata consigliata da LinkedIn (15-30 secondi) | `recordings/<slug-progetto>/` |
 | `<progetto>-social-post-<data>.md` | Il testo del post LinkedIn, pronto per essere copiato e pubblicato | `output/` |
 
+## Esempio
+
+Video generato da ClipDev, senza interventi manuali, per un e-commerce dimostrativo in React che usa la Context API per un filtro di budget condiviso tra le pagine:
+
+<video src="docs/demo.mp4" controls muted title="Esempio di video generato da ClipDev"></video>
+
+La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale): apertura del filtro di prezzo nella navbar, catalogo che si aggiorna in tempo reale, apertura di un prodotto e navigazione al successivo tramite il pulsante "Prossimo →" — tutto mantenendo il filtro di budget attivo. Il video, insieme a scaletta e post LinkedIn generati nella stessa esecuzione, è consultabile in [`docs/demo.mp4`](docs/demo.mp4).
+
 ## Come funziona
 
 ClipDev non è un unico strumento monolitico, ma una sequenza coordinata di passaggi, ciascuno con una responsabilità precisa:
