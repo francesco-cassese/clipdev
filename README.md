@@ -18,9 +18,9 @@ Per ogni esecuzione, ClipDev crea tre file:
 
 Video generato da ClipDev, senza interventi manuali, per un e-commerce dimostrativo in React che usa la Context API per un filtro di budget condiviso tra le pagine:
 
-<video src="docs/demo.mp4" controls muted title="Esempio di video generato da ClipDev"></video>
+![Esempio di video generato da ClipDev](docs/demo.gif)
 
-La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale): apertura del filtro di prezzo nella navbar, catalogo che si aggiorna in tempo reale, apertura di un prodotto e navigazione al successivo tramite il pulsante "Prossimo →" — tutto mantenendo il filtro di budget attivo. Il video, insieme a scaletta e post LinkedIn generati nella stessa esecuzione, è consultabile in [`docs/demo.mp4`](docs/demo.mp4).
+La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale): apertura del filtro di prezzo nella navbar, catalogo che si aggiorna in tempo reale, apertura di un prodotto e navigazione al successivo tramite il pulsante "Prossimo →" — tutto mantenendo il filtro di budget attivo. La GIF sopra è una versione compressa; il video originale in piena qualità (Full HD) è in [`docs/demo.mp4`](docs/demo.mp4).
 
 ## Come funziona
 
