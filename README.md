@@ -153,31 +153,36 @@ console.log(result.socialPost);
 ## Struttura del progetto
 
 ```
-index.js                    Punto di avvio da riga di comando (parametri espliciti)
-bin/clipdev.js               Comando globale `clipdev` (rilevamento automatico)
-pipeline/clipDevPipeline.js  Coordina l'intero processo, dall'analisi al salvataggio
-ai/
-  agents/
-    analystAgent.js          Trasforma la descrizione del progetto in una scaletta
-    directorAgent.js         Sceglie le interazioni da mostrare nel video
-    copywriterAgent.js       Scrive il testo del post per LinkedIn
-  models/
-    anthropic.js             Crea i modelli Claude condivisi dai tre agenti; qui
-                              avviene anche il controllo sulla chiave API
-tools/
-  browser/
-    recordDemoTool.js        Coordina la registrazione: apertura pagina, esecuzione
-                              interazioni, produzione del video
-    humanInteraction.js      Simula un'interazione umana con la pagina (cursore
-                              visibile, movimento del mouse, scorrimento)
-    pageInspection.js        Individua gli elementi della pagina con cui interagire
-    videoTranscode.js        Converte il video registrato nel formato finale
-    recordingConfig.js       Dimensioni del video condivise tra i moduli
-  saveOutputTool.js          Salva su disco scaletta e post
-  projectDetection.js        Interpreta i parametri da riga di comando e indovina
-                              l'URL del dev server, per il comando globale `clipdev`
-tests/                       Test automatici (node --test) sulla logica pura e
-                              di sicurezza: validazione, filtri, rilevamento
+ClipDev/
+├── index.js                  Punto di avvio da riga di comando (parametri espliciti)
+│
+├── ai/
+│   ├── agents/
+│   │   ├── analystAgent.js     Trasforma la descrizione del progetto in una scaletta
+│   │   ├── directorAgent.js    Sceglie le interazioni da mostrare nel video
+│   │   └── copywriterAgent.js  Scrive il testo del post per LinkedIn
+│   └── models/
+│       └── anthropic.js        Crea i modelli Claude condivisi dai tre agenti
+│                                (qui avviene anche il controllo sulla chiave API)
+│
+├── bin/
+│   └── clipdev.js             Comando globale `clipdev` (rilevamento automatico)
+│
+├── pipeline/
+│   └── clipDevPipeline.js     Coordina l'intero processo, dall'analisi al salvataggio
+│
+├── tests/                     Test automatici (node --test) sulla logica pura e di
+│                                sicurezza: validazione, filtri, rilevamento
+│
+└── tools/
+    ├── browser/
+    │   ├── recordDemoTool.js     Coordina la registrazione: pagina, interazioni, video
+    │   ├── humanInteraction.js   Simula un'interazione umana (cursore, mouse, scroll)
+    │   ├── pageInspection.js     Individua gli elementi con cui interagire sulla pagina
+    │   ├── videoTranscode.js     Converte il video registrato nel formato finale
+    │   └── recordingConfig.js    Dimensioni del video condivise tra i moduli
+    ├── projectDetection.js    Interpreta i parametri e indovina l'URL del dev server
+    └── saveOutputTool.js      Salva su disco scaletta e post
 ```
 
 ## Problemi comuni
