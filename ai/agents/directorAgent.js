@@ -120,11 +120,17 @@ LIMITI OPERATIVI (fondamentali, hanno priorità su tutto il resto)
   nel prompt conferma che c'è davvero altro non ancora visibile (è una
   misura reale del DOM, non una tua supposizione) — se dice che non c'è
   nulla sotto, NON scegliere "scroll", indipendentemente da cosa suggerisce
-  l'outline. Anche quando c'è, usala con parsimonia e solo se aggiunge
-  valore reale alla dimostrazione (tipicamente DOPO un'azione che apre una
-  sezione lunga, es. cast/specifiche/commenti su una pagina di dettaglio),
-  non come azione di riempimento: un "medium" verso il basso è quasi sempre
-  la scelta giusta quando serve.
+  l'outline. Non basta però che ci sia QUALCOSA sotto la piega: se la
+  percentuale indicata è piccola (meno di circa un terzo del viewport,
+  tipicamente un residuo di poche righe), scorrere non rivelerebbe
+  abbastanza da giustificare l'interruzione — non usare "scroll" in quel
+  caso. Quando invece la percentuale è ampia, usala comunque con
+  parsimonia e solo se è funzionale a un'azione successiva della stessa
+  sequenza (es. serve a portare in vista una lista di elementi tra cui poi
+  scegli cosa cliccare, o precede un'azione su un elemento più in basso):
+  non sceglierla come gesto isolato "per far vedere che c'è altro" se poi
+  la sequenza non ci fa nulla — un "medium" verso il basso è quasi sempre
+  la scelta giusta quando è davvero funzionale al resto della sequenza.
 - "drag" (selector, targetPercent: 0-100) serve per i cursori di prezzo/gli
   slider (elementi con ruolo "slider" nell'elenco): NON usare "click" per
   spostarne il valore (al più apre un pannello, non lo sposta) né "fill"
@@ -260,9 +266,16 @@ export async function planDirectorActions({ outline, elements, previousActions =
   // scorrere la pagina rivelerebbe davvero altro contenuto, invece di
   // lasciarlo indovinare dal solo testo dell'outline.
   if (overflow) {
+    // Espresso anche come percentuale dell'altezza del viewport (non solo
+    // in pixel assoluti): un numero come "128px" da solo non comunica se si
+    // tratta di un'eccedenza reale o solo di qualche riga residua — la
+    // percentuale permette all'agente di giudicare la differenza (vedi il
+    // vincolo sulla soglia minima nel prompt più sotto), invece di dover
+    // indovinare cosa significhi in pratica quel valore assoluto.
+    const overflowPercent = Math.round((overflow.pxBelowFold / overflow.viewportHeight) * 100);
     const overflowLine =
       overflow.pxBelowFold > 0
-        ? `Contenuto SOTTO la piega non ancora mostrato: SI, circa ${Math.round(overflow.pxBelowFold)}px (misurato sul DOM, non una supposizione) — uno "scroll" verso il basso lo rivelerebbe davvero.`
+        ? `Contenuto SOTTO la piega non ancora mostrato: SI, circa ${Math.round(overflow.pxBelowFold)}px (~${overflowPercent}% dell'altezza del viewport, misurato sul DOM, non una supposizione).`
         : `Contenuto SOTTO la piega non ancora mostrato: NO, la pagina è già interamente visibile nel viewport attuale — uno "scroll" verso il basso non mostrerebbe nulla di nuovo, non usarlo.`;
     promptParts.push(overflowLine);
   }
