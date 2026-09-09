@@ -95,6 +95,26 @@ export const OutputPathSchema = z
   .regex(/\.mp4$/i, "outputPath deve terminare con estensione .mp4")
   .refine((value) => !value.includes(".."), { error: "outputPath non può contenere '..' (path traversal)" });
 
+// Frammento di forma (non uno schema a sé) condiviso da ogni variante di
+// ActionSchema qui sotto, tramite spread diretto dentro ciascun
+// z.object({...}): un discriminated union Zod richiede che ogni variante
+// resti un oggetto "piatto" con un proprio campo letterale discriminante,
+// quindi un campo comune va ripetuto in ciascuna, non incapsulato in uno
+// schema base unito con .and() (che funzionerebbe, ma per un solo campo
+// condiviso complicherebbe la struttura senza benefici). sectionNumber
+// collega l'interazione alla sezione dell'outline che sta dimostrando (il
+// numero, a partire da 1, della stessa lista numerata mostrata al Director
+// Agent nel proprio prompt — vedi ai/agents/directorAgent.js): usato in
+// pipeline/clipDevPipeline.js per sincronizzare le callout testuali al
+// momento REALE in cui ciascuna sezione viene effettivamente mostrata,
+// invece che alla stima temporale fatta dall'Analyst Agent prima ancora di
+// sapere quali interazioni verranno scelte. Facoltativo perché non
+// applicabile a chi usa ClipDev come libreria fornendo azioni scritte a
+// mano (vedi il fallback descritto in clipDevPipeline.js).
+const sectionField = {
+  sectionNumber: z.number().int().positive().optional(),
+};
+
 // Descrizione di una singola interazione da eseguire sulla pagina prima di
 // terminare la registrazione. Ogni tipo di interazione (click, digitazione
 // in un campo, attesa di un elemento, pausa, scorrimento) richiede
@@ -107,11 +127,13 @@ export const ActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("click"),
     selector: z.string().min(1),
+    ...sectionField,
   }),
   z.object({
     type: z.literal("fill"),
     selector: z.string().min(1),
     value: z.string(),
+    ...sectionField,
   }),
   z.object({
     type: z.literal("waitForSelector"),
@@ -120,10 +142,12 @@ export const ActionSchema = z.discriminatedUnion("type", [
     // possibile attendere in modo affidabile un elemento che compare solo
     // dopo un'elaborazione lenta avviata da un'azione precedente.
     timeoutMs: z.number().int().positive().max(120_000).optional(),
+    ...sectionField,
   }),
   z.object({
     type: z.literal("wait"),
     timeoutMs: z.number().int().positive().max(60_000),
+    ...sectionField,
   }),
   z.object({
     type: z.literal("scroll"),
@@ -135,10 +159,12 @@ export const ActionSchema = z.discriminatedUnion("type", [
     // ha ancora misurato: la conversione in pixel avviene in
     // tools/browser/humanInteraction.js.
     amount: z.enum(["small", "medium", "large"]).default("medium"),
+    ...sectionField,
   }),
   z.object({
     type: z.literal("drag"),
     selector: z.string().min(1),
+    ...sectionField,
     // Posizione di destinazione lungo un cursore/slider, espressa come
     // percentuale del suo range (0 = valore minimo, 100 = valore massimo)
     // invece che come valore assoluto: l'agente che sceglie le interazioni
@@ -462,7 +488,7 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
   const parsedActions = z.array(ActionSchema).max(20).parse(actions);
 
   if (parsedActions.length === 0) {
-    return { cursorState, ranAnyAction: false, cutRanges: [] };
+    return { cursorState, ranAnyAction: false, cutRanges: [], actionTimings: [] };
   }
 
   // Il conteggio delle richieste di rete in corso viene avviato prima
@@ -471,12 +497,37 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
   // già essere osservata quando questo accade.
   const networkTracker = createNetworkIdleTracker(page);
   let cutRange = null;
+  // Istante reale (in secondi relativi all'inizio dell'intera registrazione,
+  // stessa base usata da cutRange sopra) in cui ciascuna azione ha
+  // effettivamente iniziato ad eseguire, insieme alla sezione dell'outline
+  // che stava dimostrando (se l'agente l'ha indicata, vedi sectionField in
+  // ActionSchema). Usato da pipeline/clipDevPipeline.js per sincronizzare le
+  // callout testuali al momento REALE in cui ciascuna sezione compare nel
+  // video, invece che alla stima fatta dall'Analyst Agent prima ancora che
+  // il Director Agent scegliesse le interazioni vere.
+  const actionTimings = [];
   try {
     // Esegue in sequenza tutte le interazioni richieste, nell'ordine in
     // cui sono state fornite: è questa la sequenza che finisce ripresa nel
     // video.
     for (const step of parsedActions) {
       await runAction(page, step, cursorState);
+      // Registrato DOPO l'esecuzione, non prima: per un'azione che avvia
+      // una navigazione (es. un click su un link di menu), il "prima"
+      // cadrebbe nell'istante in cui il cursore comincia appena a
+      // muoversi verso l'elemento — con la pagina di destinazione ancora
+      // non caricata — mentre il "dopo" cade proprio all'inizio del tempo
+      // morto di attesa che viene tagliato via subito sotto: grazie a
+      // mapRawTimeToEditedTime (vedi pipeline/clipDevPipeline.js), quel
+      // punto si traduce esattamente nell'istante in cui il video, dopo il
+      // taglio, mostra già il risultato dell'azione — non un momento
+      // intermedio scelto a caso.
+      if (recordingStartedAt && step.sectionNumber) {
+        actionTimings.push({
+          sectionNumber: step.sectionNumber,
+          rawStartSeconds: (Date.now() - recordingStartedAt) / 1000,
+        });
+      }
     }
 
     // Molte interazioni (in particolare l'ultimo click di una sequenza)
@@ -518,7 +569,7 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
     networkTracker.stop();
   }
 
-  return { cursorState, ranAnyAction: true, cutRanges: cutRange ? [cutRange] : [] };
+  return { cursorState, ranAnyAction: true, cutRanges: cutRange ? [cutRange] : [], actionTimings };
 }
 
 // Completa una registrazione già avvenuta (interazioni comprese):

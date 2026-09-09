@@ -98,6 +98,15 @@ LIMITI OPERATIVI (fondamentali, hanno priorità su tutto il resto)
 - Se un campo di testo va compilato prima di un click correlato (es. un
   form di ricerca prima del bottone "Cerca"), inserisci la "fill" PRIMA
   del "click" corrispondente, nell'ordine in cui devono essere eseguite.
+- Ogni azione (di qualunque tipo) può includere sectionNumber: il numero
+  (a partire da 1) della sezione dell'outline — tra quelle elencate in
+  "Sezioni del video" più sotto, con la stessa numerazione — che
+  quell'azione sta dimostrando. Indicalo SEMPRE quando l'azione dimostra
+  chiaramente una sezione precisa: viene usato per sincronizzare le
+  callout testuali al momento reale in cui ciascuna sezione compare nel
+  video, non a una stima. Se un'azione è solo strumentale (es. aprire un
+  menu prima del vero passaggio dimostrativo) e non rappresenta da sola
+  nessuna sezione precisa, ometti pure sectionNumber per quell'azione.
 - Massimo 6 azioni: il video target è di 15-30 secondi (linee guida
   ufficiali LinkedIn), non c'è spazio per una sequenza lunga. Se non trovi
   elementi sensati da usare per l'outline fornito, restituisci un elenco
@@ -242,7 +251,7 @@ export async function planDirectorActions({ outline, elements, previousActions =
 
   const promptParts = [
     `Obiettivo del progetto: ${outline.goal}`,
-    `Sezioni del video (ordine e priorità suggeriti dall'Analyst Agent):\n${sectionsDescription}`,
+    `Sezioni del video (ordine e priorità suggeriti dall'Analyst Agent; la numerazione qui è quella da usare in sectionNumber):\n${sectionsDescription}`,
     `${elementsLabel}:\n${elementsDescription}`,
   ];
 

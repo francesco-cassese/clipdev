@@ -102,6 +102,81 @@ function formatOutlineForCopywriter(outline) {
   ].join("\n\n");
 }
 
+// Traduce un istante espresso in secondi "grezzi" (relativi all'inizio
+// della registrazione, prima di qualunque taglio) nell'istante
+// corrispondente nella timeline FINALE, già ripulita dal tempo morto:
+// sottrae la durata di ogni intervallo tagliato che precede quel punto. Se
+// il punto cade dentro un intervallo tagliato, corrisponde esattamente al
+// momento in cui inizia quel taglio nella timeline finale (l'istante
+// stesso non esiste più nel video, per definizione). Richiede `cutRanges`
+// ordinato per startSeconds crescente — garantito dal modo in cui viene
+// costruito più sotto (il taglio iniziale del caricamento per primo, poi
+// le attese accumulate in ordine cronologico durante la registrazione).
+export function mapRawTimeToEditedTime(rawSeconds, cutRanges) {
+  let removedBefore = 0;
+  for (const range of cutRanges) {
+    if (range.endSeconds <= rawSeconds) {
+      removedBefore += range.endSeconds - range.startSeconds;
+    } else if (range.startSeconds <= rawSeconds) {
+      removedBefore += rawSeconds - range.startSeconds;
+      break;
+    } else {
+      break;
+    }
+  }
+  return Math.max(0, rawSeconds - removedBefore);
+}
+
+// Durata minima di una callout, per restare leggibile: anche se due tocchi
+// della stessa sezione avvenissero a pochi istanti di distanza, la
+// finestra non scende mai sotto questo valore.
+const MIN_CALLOUT_DURATION_SECONDS = 1.5;
+// Durata per la callout dell'ultima sezione toccata, che altrimenti non
+// avrebbe un confine naturale (nessuna sezione successiva la delimita):
+// resta visibile per un tempo ragionevole, non per tutto il resto del
+// video.
+const LAST_CALLOUT_DURATION_SECONDS = 8;
+
+// Costruisce le callout testuali sincronizzate al momento REALE in cui
+// ciascuna sezione dell'outline è stata effettivamente dimostrata,
+// ricavato da actionTimings (vedi runClipDevActionBatch in
+// tools/browser/recordDemoTool.js) — più preciso della sola stima fatta
+// dall'Analyst Agent prima ancora che il Director Agent scegliesse le
+// interazioni vere, perché quella stima non poteva sapere, ad esempio,
+// quanti secondi avrebbe richiesto una navigazione iniziale non prevista.
+// Le sezioni mai toccate da nessuna azione vengono semplicemente escluse,
+// non mostrate con un tempismo indovinato: un video non deve promettere a
+// schermo qualcosa che non mostra davvero.
+export function buildCalloutsFromActionTimings(actionTimings, sections, cutRanges) {
+  const tagged = actionTimings
+    .filter((timing) => sections[timing.sectionNumber - 1]?.calloutText)
+    .sort((a, b) => a.rawStartSeconds - b.rawStartSeconds);
+
+  // Raggruppa i tocchi consecutivi che appartengono alla stessa sezione:
+  // ognuno diventa una finestra continua, dal primo tocco di quella
+  // sezione fino al primo tocco della sezione successiva diversa.
+  const touches = [];
+  for (const timing of tagged) {
+    const last = touches[touches.length - 1];
+    if (last && last.sectionNumber === timing.sectionNumber) continue;
+    touches.push(timing);
+  }
+
+  return touches.map((touch, index) => {
+    const section = sections[touch.sectionNumber - 1];
+    const startSeconds = mapRawTimeToEditedTime(touch.rawStartSeconds, cutRanges);
+    const nextTouch = touches[index + 1];
+    const rawEndSeconds = nextTouch
+      ? nextTouch.rawStartSeconds
+      : touch.rawStartSeconds + LAST_CALLOUT_DURATION_SECONDS;
+    const endSeconds = Math.max(
+      startSeconds + MIN_CALLOUT_DURATION_SECONDS,
+      mapRawTimeToEditedTime(rawEndSeconds, cutRanges)
+    );
+    return { text: section.calloutText, startSeconds, endSeconds };
+  });
+}
+
 export async function runClipDevPipeline({
   projectName,
   projectSummary,
@@ -254,6 +329,11 @@ export async function runClipDevPipeline({
   // rimuovere nel montaggio finale, accumulati sia dal primo gruppo di
   // interazioni sia da ogni eventuale turno di ripianificazione più sotto.
   const cutRanges = [];
+  // Istanti reali in cui ciascuna azione con sectionNumber ha iniziato ad
+  // eseguire (vedi runClipDevActionBatch), accumulati allo stesso modo:
+  // usati più sotto per sincronizzare le callout testuali al momento
+  // effettivo in cui ciascuna sezione dell'outline compare nel video.
+  const actionTimings = [];
   try {
     const firstBatch = await runClipDevActionBatch({
       page: recordingSession.page,
@@ -263,6 +343,7 @@ export async function runClipDevPipeline({
     });
     hadActions = firstBatch.ranAnyAction;
     cutRanges.push(...firstBatch.cutRanges);
+    actionTimings.push(...firstBatch.actionTimings);
 
     // FASE 1.7 — Ripianificazione: avviene solo se questa prima serie di
     // interazioni è stata decisa dal Director Agent (non fornita
@@ -328,6 +409,7 @@ export async function runClipDevPipeline({
             recordingStartedAt: recordingSession.recordingStartedAt,
           });
           cutRanges.push(...followUpBatch.cutRanges);
+          actionTimings.push(...followUpBatch.actionTimings);
           actionsSoFar = [...actionsSoFar, ...followUpActions];
         } catch (error) {
           // Un eventuale problema in questo turno (ad esempio un
@@ -361,25 +443,43 @@ export async function runClipDevPipeline({
   }
 
   // Le callout testuali da sovrimprimere in fase di montaggio (vedi
-  // tools/browser/videoTranscode.js) vengono lette qui direttamente
-  // dall'outline: solo le sezioni per cui l'Analyst Agent ha effettivamente
-  // stimato sia il testo sia entrambi i timestamp vengono incluse, le altre
-  // vengono semplicemente saltate invece di far fallire l'intero video per
-  // una singola sezione senza questi dati (facoltativi anche in
-  // OutlineSectionSchema, vedi tools/saveOutputTool.js, per lo stesso
-  // motivo).
-  const callouts = outline.sections
-    .filter(
-      (section) =>
-        section.calloutText !== undefined &&
-        section.calloutStartSeconds !== undefined &&
-        section.calloutEndSeconds !== undefined
-    )
-    .map((section) => ({
-      text: section.calloutText,
-      startSeconds: section.calloutStartSeconds,
-      endSeconds: section.calloutEndSeconds,
-    }));
+  // tools/browser/videoTranscode.js) vengono sincronizzate al momento REALE
+  // in cui ciascuna sezione dell'outline è stata effettivamente dimostrata
+  // (vedi buildCalloutsFromActionTimings sopra), non alla stima fatta
+  // dall'Analyst Agent prima ancora che il Director Agent scegliesse le
+  // interazioni vere: quella stima non poteva sapere, ad esempio, quanti
+  // secondi avrebbe richiesto una navigazione iniziale non prevista. Il
+  // taglio del tempo morto viene ricalcolato qui (stessa formula usata
+  // internamente da finalizeClipDevRecording) solo per tradurre
+  // correttamente questi tempi, non per essere passato di nuovo a valle.
+  const trimStartSeconds = Math.max(
+    0,
+    (recordingSession.pageReadyAt - recordingSession.recordingStartedAt) / 1000
+  );
+  const allCutRangesForCallouts =
+    trimStartSeconds > 0 ? [{ startSeconds: 0, endSeconds: trimStartSeconds }, ...cutRanges] : cutRanges;
+  const realCallouts = buildCalloutsFromActionTimings(actionTimings, outline.sections, allCutRangesForCallouts);
+
+  // Se nessuna azione era taggata con una sezione — tipicamente quando le
+  // interazioni sono state fornite manualmente da chi usa ClipDev come
+  // libreria, non scelte dal Director Agent — non esiste alcun tempismo
+  // reale a cui agganciarsi: si ricade sulla stima originale dell'Analyst
+  // Agent, comunque meglio di nessuna callout.
+  const callouts =
+    realCallouts.length > 0
+      ? realCallouts
+      : outline.sections
+          .filter(
+            (section) =>
+              section.calloutText !== undefined &&
+              section.calloutStartSeconds !== undefined &&
+              section.calloutEndSeconds !== undefined
+          )
+          .map((section) => ({
+            text: section.calloutText,
+            startSeconds: section.calloutStartSeconds,
+            endSeconds: section.calloutEndSeconds,
+          }));
 
   const videoResult = await finalizeClipDevRecording({
     ...recordingSession,
