@@ -14,8 +14,16 @@ import { chromium } from "playwright";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
-import { VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
-import { CURSOR_INIT_SCRIPT, moveMouseHumanLike, randomDelay, scrollPageSmooth, SCROLL_AMOUNT_PX } from "./humanInteraction.js";
+import { CanvasFormatSchema, DEFAULT_CANVAS_FORMAT, VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
+import {
+  CURSOR_INIT_SCRIPT,
+  moveMouseHumanLike,
+  pickRealisticFillValue,
+  randomDelay,
+  scrollPageSmooth,
+  SCROLL_AMOUNT_PX,
+  waitForElementStable,
+} from "./humanInteraction.js";
 import {
   createNetworkIdleTracker,
   extractInteractiveElements,
@@ -24,7 +32,7 @@ import {
   waitForDomStability,
   waitForImagesToLoad,
 } from "./pageInspection.js";
-import { transcodeToMp4 } from "./videoTranscode.js";
+import { CalloutSchema, transcodeToMp4 } from "./videoTranscode.js";
 
 // Breve pausa dopo l'ultima interazione eseguita, prima di terminare la
 // registrazione: garantisce che il risultato di un'azione (ad esempio un
@@ -138,6 +146,15 @@ export const ActionSchema = z.discriminatedUnion("type", [
 async function runAction(page, step, cursorState) {
   switch (step.type) {
     case "click": {
+      // Prima di calcolare il punto esatto verso cui muovere il cursore,
+      // si attende che l'elemento sia visibile e abbia smesso di
+      // muoversi/ridimensionarsi (vedi waitForElementStable in
+      // tools/browser/humanInteraction.js): senza questa attesa, un
+      // elemento ancora in transizione (un menu che si sta aprendo, un
+      // banner che si sposta durante il caricamento) rischierebbe di non
+      // trovarsi più nel punto calcolato nel momento in cui il click
+      // avviene davvero.
+      await waitForElementStable(page, step.selector);
       const target = await locateActionTarget(page, step.selector);
       await moveMouseHumanLike(page, cursorState, target.x, target.y, target.width);
       await page.evaluate(() => window.__clipdevCursorClick?.());
@@ -151,6 +168,7 @@ async function runAction(page, step, cursorState) {
       break;
     }
     case "fill": {
+      await waitForElementStable(page, step.selector);
       const target = await locateActionTarget(page, step.selector);
       await moveMouseHumanLike(page, cursorState, target.x, target.y, target.width);
       await page.evaluate(() => window.__clipdevCursorClick?.());
@@ -163,11 +181,17 @@ async function runAction(page, step, cursorState) {
       // mostrare la cancellazione di un valore precedente carattere per
       // carattere.
       await page.locator(step.selector).first().fill("");
-      // Il testo viene digitato un carattere alla volta, con un breve
-      // ritardo realistico tra l'uno e l'altro, così la digitazione
-      // risulta visibile e credibile nel video invece che comparire tutta
-      // insieme.
-      await page.locator(step.selector).first().pressSequentially(step.value, { delay: 45 });
+      // Se il valore scelto dal Director Agent somiglia a un segnaposto
+      // generico ("test", "asdf", ...), viene sostituito con uno
+      // semanticamente coerente con l'elemento (vedi
+      // pickRealisticFillValue in tools/browser/humanInteraction.js): un
+      // video professionale non deve mostrare un campo compilato con un
+      // valore palesemente finto. Il testo viene poi digitato un carattere
+      // alla volta, con un breve ritardo realistico tra l'uno e l'altro,
+      // così la digitazione risulta visibile e credibile nel video invece
+      // che comparire tutta insieme.
+      const fillValue = pickRealisticFillValue(step.selector, step.value);
+      await page.locator(step.selector).first().pressSequentially(fillValue, { delay: 45 });
       break;
     }
     case "waitForSelector":
@@ -491,12 +515,20 @@ export async function finalizeClipDevRecording({
   // runClipDevActionBatch — da rimuovere dal video insieme al taglio dei
   // primissimi istanti calcolato più sotto.
   cutRanges = [],
+  // Callout testuali da sovrimprimere in fase di montaggio, lette
+  // dall'outline (vedi tools/browser/videoTranscode.js).
+  callouts = [],
+  // "widescreen" (default) o "square": vedi CANVAS_FORMATS in
+  // tools/browser/recordingConfig.js.
+  canvasFormat = DEFAULT_CANVAS_FORMAT,
 }) {
   try {
     // I parametri ricevuti dall'esterno vengono controllati anche qui,
     // per non dare per scontato che siano già stati verificati altrove.
     const parsedOutputPath = OutputPathSchema.parse(outputPath);
     const parsedMinDurationMs = z.number().int().positive().max(120_000).parse(minDurationMs);
+    const parsedCallouts = z.array(CalloutSchema).parse(callouts);
+    const parsedCanvasFormat = CanvasFormatSchema.parse(canvasFormat);
 
     // Il percorso del file viene ricalcolato all'interno della cartella
     // prevista e si verifica che il risultato resti effettivamente
@@ -556,8 +588,13 @@ export async function finalizeClipDevRecording({
       trimStartSeconds > 0 ? [{ startSeconds: 0, endSeconds: trimStartSeconds }, ...cutRanges] : cutRanges;
 
     // Converte il file video nel formato finale, nel percorso richiesto,
-    // rimuovendo per intero gli intervalli di tempo morto individuati.
-    await transcodeToMp4(rawWebmPath, resolvedOutputPath, allCutRanges);
+    // rimuovendo per intero gli intervalli di tempo morto individuati e
+    // applicando le callout/il formato canvas richiesti.
+    await transcodeToMp4(rawWebmPath, resolvedOutputPath, {
+      cutRanges: allCutRanges,
+      callouts: parsedCallouts,
+      canvasFormat: parsedCanvasFormat,
+    });
 
     // Il file intermedio non serve più una volta ottenuto il file finale:
     // viene rimosso per non lasciare file temporanei accumulati.
