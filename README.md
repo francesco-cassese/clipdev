@@ -33,7 +33,7 @@ ClipDev non è un unico strumento monolitico, ma una sequenza coordinata di pass
 
 2. **Ispezione della pagina** — in parallelo, Playwright apre un browser Chromium che visita l'indirizzo indicato, attende che la pagina sia completamente caricata (non solo il primo evento di caricamento, ma anche eventuali dati richiesti in modo asincrono all'avvio) e individua gli elementi reali con cui si può interagire (pulsanti, link, campi di input) leggendo lo stesso albero di accessibilità consultato dagli screen reader — non solo i tag HTML più comuni, ma anche i controlli costruiti con componenti custom o incapsulati in una Shadow DOM.
 
-3. **Pianificazione delle interazioni** — un secondo agente (stesso modello, stesso framework) sceglie quali interazioni mostrare nel video (click, digitazione, scorrimento), **solo tra gli elementi realmente presenti sulla pagina**: non vengono mai inventati elementi che non esistono.
+3. **Pianificazione delle interazioni** — un secondo agente (stesso modello, stesso framework) sceglie quali interazioni mostrare nel video (click, digitazione, scorrimento, trascinamento di cursori/slider), **solo tra gli elementi realmente presenti sulla pagina**: non vengono mai inventati elementi che non esistono.
 
 4. **Registrazione** — le interazioni scelte vengono eseguite con Playwright nello stesso browser, con un cursore visibile che si muove in modo naturale (non a scatti) e un ripple semitrasparente che si espande a ogni click, per restare leggibile anche su schermi piccoli. Prima di ogni click o digitazione, ClipDev verifica che l'elemento coinvolto sia visibile e abbia smesso di muoversi (utile con menu che si aprono con un'animazione o banner che si spostano durante il caricamento), e sostituisce automaticamente un eventuale valore segnaposto generico ("test", "asdf") con uno semanticamente plausibile prima di digitarlo in un campo. Se un'interazione fa comparire contenuti caricati da un servizio esterno (ad esempio le card di un catalogo prodotti), l'intervallo di attesa viene registrato e rimosso per intero in fase di montaggio (lo stesso "taglio del tempo morto" usato dagli strumenti professionali di registrazione demo), così nel video non compare mai lo stato di caricamento intermedio. Il risultato viene registrato in un video WebM.
 
@@ -56,6 +56,8 @@ Queste funzionalità esistono per un motivo preciso: un video e un post pensati 
 **Dati realistici nei campi di testo** — Se il valore scelto per un campo da compilare somiglia a un segnaposto palesemente generico ("test", "asdf", "lorem ipsum"...), ClipDev lo sostituisce con un valore plausibile dedotto dal contesto dell'elemento (un campo che sembra un'email riceve un'email vera, un campo di ricerca riceve una query plausibile, e così via): un video professionale non deve mostrare un campo compilato con un valore palesemente finto.
 
 **Callout testuali sincronizzate** — Le pillole di testo semitrasparenti che compaiono nel video ("Filtro budget globale", "Sincronizzazione in tempo reale"...) vengono lette direttamente dalla scaletta prodotta dall'Analyst Agent e sovrimpresse da ffmpeg in fase di montaggio, con una breve dissolvenza in entrata e in uscita. Servono a comunicare cosa sta succedendo a schermo anche a chi guarda senza audio — la maggioranza del pubblico su LinkedIn. Se nessun font grassetto tra quelli noti (vedi [Requisiti](#requisiti)) è disponibile sul sistema, le callout vengono semplicemente saltate: il resto della conversione prosegue comunque.
+
+**Trascinamento di cursori e slider** — Un filtro di prezzo o un selettore di intervallo non si aziona con un click (al più ne apre il pannello) né con la digitazione: va trascinato. ClipDev riconosce questi controlli (`<input type="range">` nativi o slider costruiti con ruolo ARIA `slider`) e li trascina davvero, con lo stesso cursore visibile usato per il resto del video, leggendo dal DOM il valore minimo, massimo e attuale del controllo — non un valore indovinato — per calcolare dove fermarsi. Senza questa capacità, un video su una funzionalità costruita proprio attorno a un filtro del genere potrebbe mostrare al più il pannello che si apre, mai l'effetto del filtro sui risultati.
 
 **Due formati di canvas** — Il video registrato è sempre Full HD 16:9 (lo standard per il feed desktop), ma può essere esportato anche incapsulato in un canvas quadrato 1080×1080 (`--canvas=square`): la viewport registrata viene rimpicciolita e centrata, con angoli arrotondati, una leggera ombra e uno sfondo scuro minimale attorno. Un video quadrato occupa più spazio verticale nello schermo di un telefono rispetto a un widescreen con bande nere, il formato in cui la maggior parte del traffico su LinkedIn avviene.
 
@@ -222,7 +224,8 @@ ClipDev/
     ├── browser/
     │   ├── recordDemoTool.js     Coordina la registrazione: pagina, interazioni, video
     │   ├── humanInteraction.js   Simula un'interazione umana (cursore, ripple, mouse,
-    │   │                          scroll, stabilità dell'elemento, dati realistici)
+    │   │                          scroll, trascinamento di slider, stabilità
+    │   │                          dell'elemento, dati realistici)
     │   ├── pageInspection.js     Individua gli elementi con cui interagire sulla pagina
     │   ├── videoTranscode.js     Converte il video: taglio, callout, canvas quadrato
     │   └── recordingConfig.js    Dimensioni video e formati canvas condivisi tra i moduli
