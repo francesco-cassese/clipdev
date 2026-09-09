@@ -66,7 +66,19 @@ i contenuti). I campi richiesti sono:
   presentazione definito sopra (hook prima); ogni sezione ha un titolo, un
   contenuto descrittivo di cosa si vede a schermo e, quando puoi stimarla
   con ragionevole sicurezza, una durata in secondi — la somma delle durate
-  deve restare nel range 15-30s indicato sopra.
+  deve restare nel range 15-30s indicato sopra. Quando indichi una durata,
+  aggiungi anche una callout testuale per la stessa sezione: calloutText
+  (etichetta di 4-5 parole al massimo, es. "Filtro budget globale" o
+  "Sincronizzazione in tempo reale" — MAI una frase completa) e i suoi
+  timestamp indicativi calloutStartSeconds/calloutEndSeconds, espressi in
+  secondi cumulativi lungo l'intero video (non relativi alla sola sezione):
+  la prima sezione parte da calloutStartSeconds vicino a 0, la successiva
+  da dove finisce la precedente, e così via, in modo che le finestre non si
+  sovrappongano mai tra loro. Queste etichette vengono sovrimpresse nel
+  video da uno strumento automatico (non le scrivi tu direttamente a
+  schermo): sono un rinforzo testuale per chi guarda senza audio, quindi
+  vanno pensate come una didascalia leggibile in un colpo d'occhio, non come
+  una ripetizione del titolo della sezione.
 - technicalHighlights: punti tecnici degni di nota (decisioni
   architetturali, pattern, tradeoff) che il Copywriter potrà usare come
   "ganci" di interesse tecnico nel testo del post, non nel video.

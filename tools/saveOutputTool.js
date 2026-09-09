@@ -30,12 +30,33 @@ const ProjectSlugSchema = z
 // Descrizione di una singola sezione della demo. La durata stimata è
 // facoltativa perché non sempre è possibile calcolarla con sicurezza (ad
 // esempio quando la descrizione del progetto fornita è troppo vaga), e non
-// deve essere un motivo di blocco per il resto dell'outline.
-export const OutlineSectionSchema = z.object({
-  title: z.string().min(1, "Il titolo della sezione non può essere vuoto"),
-  content: z.string().min(1, "Il contenuto della sezione non può essere vuoto"),
-  estimatedDurationSeconds: z.number().int().positive().optional(),
-});
+// deve essere un motivo di blocco per il resto dell'outline. Per lo stesso
+// motivo sono facoltativi anche i tre campi della callout testuale
+// (calloutText e i suoi timestamp indicativi): letti da
+// tools/browser/videoTranscode.js per sovrimprimere una pillola di testo
+// sincronizzata con questa sezione (vedi CalloutSchema in quel modulo, che
+// valida di nuovo questi stessi dati al momento di usarli — qui vengono
+// solo accettati o rifiutati nella forma, non nel significato temporale
+// relativo alle altre sezioni, che resta responsabilità dell'Analyst
+// Agent).
+export const OutlineSectionSchema = z
+  .object({
+    title: z.string().min(1, "Il titolo della sezione non può essere vuoto"),
+    content: z.string().min(1, "Il contenuto della sezione non può essere vuoto"),
+    estimatedDurationSeconds: z.number().int().positive().optional(),
+    // Etichetta breve (indicativamente 4-5 parole) da sovrimprimere nel
+    // video come callout testuale durante questa sezione.
+    calloutText: z.string().min(1).max(40, "calloutText deve restare breve (indicativamente 4-5 parole)").optional(),
+    calloutStartSeconds: z.number().nonnegative().optional(),
+    calloutEndSeconds: z.number().positive().optional(),
+  })
+  .refine(
+    (section) =>
+      section.calloutStartSeconds === undefined ||
+      section.calloutEndSeconds === undefined ||
+      section.calloutEndSeconds > section.calloutStartSeconds,
+    { error: "calloutEndSeconds deve essere maggiore di calloutStartSeconds", path: ["calloutEndSeconds"] }
+  );
 
 // Struttura completa di un outline valido: obiettivo del progetto,
 // tecnologie usate, sezioni della demo e punti tecnici di rilievo.
