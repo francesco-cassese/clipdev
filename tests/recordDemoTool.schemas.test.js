@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { TargetUrlSchema, OutputPathSchema } from "../tools/browser/recordDemoTool.js";
+import { ActionSchema, TargetUrlSchema, OutputPathSchema } from "../tools/browser/recordDemoTool.js";
 
 test("TargetUrlSchema accetta localhost e 127.0.0.1", () => {
   assert.equal(TargetUrlSchema.safeParse("http://localhost:3000").success, true);
@@ -36,4 +36,23 @@ test("OutputPathSchema rifiuta un percorso con path traversal", () => {
 
 test("OutputPathSchema rifiuta un'estensione diversa da .mp4", () => {
   assert.equal(OutputPathSchema.safeParse("mio-progetto/demo.webm").success, false);
+});
+
+test("ActionSchema accetta un drag con targetPercent nel range 0-100", () => {
+  const result = ActionSchema.safeParse({ type: "drag", selector: "#prezzo-max", targetPercent: 50 });
+  assert.equal(result.success, true);
+});
+
+test("ActionSchema accetta gli estremi 0 e 100 per targetPercent", () => {
+  assert.equal(ActionSchema.safeParse({ type: "drag", selector: "#prezzo-max", targetPercent: 0 }).success, true);
+  assert.equal(ActionSchema.safeParse({ type: "drag", selector: "#prezzo-max", targetPercent: 100 }).success, true);
+});
+
+test("ActionSchema rifiuta un drag con targetPercent fuori dal range 0-100", () => {
+  assert.equal(ActionSchema.safeParse({ type: "drag", selector: "#prezzo-max", targetPercent: 150 }).success, false);
+  assert.equal(ActionSchema.safeParse({ type: "drag", selector: "#prezzo-max", targetPercent: -10 }).success, false);
+});
+
+test("ActionSchema rifiuta un drag senza selettore", () => {
+  assert.equal(ActionSchema.safeParse({ type: "drag", targetPercent: 50 }).success, false);
 });

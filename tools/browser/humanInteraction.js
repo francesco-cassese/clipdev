@@ -278,6 +278,92 @@ export async function scrollPageSmooth(page, totalDeltaY) {
   }
 }
 
+// --- Trascinamento di cursori/slider ------------------------------------------
+//
+// Alcuni controlli (un cursore di prezzo, un selettore di intervallo) non si
+// azionano con un click o con la digitazione, ma trascinando il puntatore:
+// un click da solo può al più aprirne il pannello, non spostarne il valore.
+// A differenza di moveMouseHumanLike (pensato per un movimento libero nello
+// spazio, verso un punto qualsiasi della pagina), qui il percorso resta
+// ancorato al binario orizzontale del controllo: il movimento è quindi
+// rettilineo lungo quell'asse, non curvo, con la stessa accelerazione
+// naturale in entrata e uscita usata altrove.
+
+// Numero di passi intermedi del trascinamento: sufficienti per un movimento
+// fluido e ben leggibile nel video, senza generare più eventi di quanti ne
+// servano.
+const DRAG_STEPS = 24;
+
+// Legge dal DOM le informazioni necessarie per calcolare la posizione del
+// trascinamento: il valore minimo, massimo e attuale del controllo. Gestisce
+// sia un vero <input type="range"> (dove queste informazioni sono proprietà
+// native dell'elemento) sia un controllo costruito con un ruolo ARIA
+// "slider" su un elemento generico (dove sono invece esposte tramite gli
+// attributi aria-valuemin/aria-valuemax/aria-valuenow) — lo stesso ruolo che
+// tools/browser/pageInspection.js riconosce già come interattivo.
+export async function readSliderRange(locator) {
+  return locator.evaluate((el) => {
+    if (el.tagName === "INPUT" && el.type === "range") {
+      return { min: Number(el.min || 0), max: Number(el.max || 100), current: Number(el.value) };
+    }
+    const min = Number(el.getAttribute("aria-valuemin") ?? 0);
+    const max = Number(el.getAttribute("aria-valuemax") ?? 100);
+    const current = Number(el.getAttribute("aria-valuenow") ?? min);
+    return { min, max, current };
+  });
+}
+
+// Trascina il cursore visibile dalla posizione attuale del controllo (letta
+// dal DOM, non presunta) fino alla percentuale di destinazione indicata,
+// tenendo il pulsante del mouse premuto per l'intera durata del movimento —
+// esattamente il gesto che farebbe una persona reale per spostare un
+// cursore di prezzo. `box` è il rettangolo dell'elemento (già misurato da
+// chi chiama, vedi runAction in tools/browser/recordDemoTool.js);
+// `sliderRange` è il risultato di readSliderRange sopra.
+export async function dragSliderHumanLike(page, cursorState, box, sliderRange, targetPercent) {
+  const clampedPercent = Math.min(100, Math.max(0, targetPercent));
+  const trackY = box.y + box.height / 2;
+
+  const currentPercent =
+    sliderRange.max > sliderRange.min
+      ? ((sliderRange.current - sliderRange.min) / (sliderRange.max - sliderRange.min)) * 100
+      : 0;
+  // Un punto calcolato esattamente sul bordo del rettangolo (percentuale 0
+  // o 100) cade un pixel fuori dall'area che il browser considera parte
+  // dell'elemento: un mousedown lì non aggancerebbe lo slider, vanificando
+  // l'intero trascinamento (difetto osservato concretamente in fase di
+  // verifica). Un margine di un pixel per lato mantiene ogni posizione
+  // calcolata sempre strettamente dentro l'elemento, anche agli estremi.
+  const trackInsetPx = 1;
+  const toTrackX = (percent) =>
+    Math.min(
+      box.x + box.width - trackInsetPx,
+      Math.max(box.x + trackInsetPx, box.x + (box.width * percent) / 100)
+    );
+  const startX = toTrackX(currentPercent);
+  const endX = toTrackX(clampedPercent);
+
+  // Il cursore raggiunge il punto di presa (la posizione attuale del
+  // cursore del controllo, non il suo bordo) con lo stesso movimento
+  // naturale usato per ogni altro spostamento, non con un salto diretto.
+  await moveMouseHumanLike(page, cursorState, startX, trackY, Math.min(box.height, 24));
+  await page.evaluate(() => window.__clipdevCursorClick?.());
+  await page.waitForTimeout(randomDelay(60, 140));
+  await page.mouse.down();
+
+  for (let i = 1; i <= DRAG_STEPS; i += 1) {
+    const easedT = minimumJerkEase(i / DRAG_STEPS);
+    const x = startX + (endX - startX) * easedT;
+    await page.mouse.move(x, trackY);
+    await page.waitForTimeout(10 + Math.random() * 6);
+  }
+
+  await page.waitForTimeout(randomDelay(60, 140));
+  await page.mouse.up();
+  cursorState.x = endX;
+  cursorState.y = trackY;
+}
+
 // --- Stabilità dell'elemento prima di un'interazione -------------------------
 //
 // Tempo massimo complessivo di attesa prima di rinunciare e procedere

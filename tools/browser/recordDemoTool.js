@@ -17,9 +17,11 @@ import path from "node:path";
 import { CanvasFormatSchema, DEFAULT_CANVAS_FORMAT, VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
 import {
   CURSOR_INIT_SCRIPT,
+  dragSliderHumanLike,
   moveMouseHumanLike,
   pickRealisticFillValue,
   randomDelay,
+  readSliderRange,
   scrollPageSmooth,
   SCROLL_AMOUNT_PX,
   waitForElementStable,
@@ -134,6 +136,19 @@ export const ActionSchema = z.discriminatedUnion("type", [
     // tools/browser/humanInteraction.js.
     amount: z.enum(["small", "medium", "large"]).default("medium"),
   }),
+  z.object({
+    type: z.literal("drag"),
+    selector: z.string().min(1),
+    // Posizione di destinazione lungo un cursore/slider, espressa come
+    // percentuale del suo range (0 = valore minimo, 100 = valore massimo)
+    // invece che come valore assoluto: l'agente che sceglie le interazioni
+    // non può conoscere in anticipo i valori min/max reali dell'elemento
+    // (non fanno parte dell'elenco di elementi che riceve, vedi
+    // tools/browser/pageInspection.js) — sono letti dal DOM solo al momento
+    // dell'esecuzione (vedi tools/browser/humanInteraction.js). Stesso
+    // principio già usato sopra per "scroll" con "amount".
+    targetPercent: z.number().min(0).max(100),
+  }),
 ]);
 
 // Esegue una singola interazione sulla pagina, in base al suo tipo. Il
@@ -209,6 +224,23 @@ async function runAction(page, step, cursorState) {
     case "scroll": {
       const deltaY = SCROLL_AMOUNT_PX[step.amount] * (step.direction === "up" ? -1 : 1);
       await scrollPageSmooth(page, deltaY);
+      break;
+    }
+    case "drag": {
+      // Un cursore di prezzo o un selettore di intervallo non si aziona con
+      // un click o con la digitazione: va trascinato. La geometria
+      // necessaria (rettangolo dell'elemento, valori min/max/attuale) viene
+      // letta qui, non riusando locateActionTarget (pensato per un singolo
+      // punto centrale, non per un intero binario di trascinamento).
+      await waitForElementStable(page, step.selector);
+      const locator = page.locator(step.selector).first();
+      await locator.scrollIntoViewIfNeeded({ timeout: 10_000 });
+      const box = await locator.boundingBox();
+      if (!box) {
+        throw new Error(`Elemento non visibile/non trovato per il selettore: ${step.selector}`);
+      }
+      const sliderRange = await readSliderRange(locator);
+      await dragSliderHumanLike(page, cursorState, box, sliderRange, step.targetPercent);
       break;
     }
     default:

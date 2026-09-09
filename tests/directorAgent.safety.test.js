@@ -57,3 +57,14 @@ test("accetta sempre un'azione di tipo scroll, che non fa riferimento a un eleme
   const action = { type: "scroll", direction: "down", amount: "medium" };
   assert.equal(isActionSafe(action, []), true);
 });
+
+test("accetta un drag su uno slider realmente presente e innocuo", () => {
+  const elements = [{ selector: "role=slider[name=\"Prezzo massimo\"]", label: "Prezzo massimo" }];
+  const action = { type: "drag", selector: "role=slider[name=\"Prezzo massimo\"]", targetPercent: 40 };
+  assert.equal(isActionSafe(action, elements), true);
+});
+
+test("scarta un drag il cui selettore non corrisponde a nessun elemento reale", () => {
+  const action = { type: "drag", selector: "role=slider[name=\"Inventato\"]", targetPercent: 40 };
+  assert.equal(isActionSafe(action, []), false);
+});
