@@ -31,6 +31,7 @@ import {
   extractInteractiveElements,
   getPageOverflowInfo,
   locateActionTarget,
+  scrollElementIntoViewSmooth,
   waitForDomStability,
   waitForImagesToLoad,
 } from "./pageInspection.js";
@@ -177,6 +178,19 @@ export const ActionSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+// Porta l'elemento in vista scorrendo la pagina in modo dolce, se non lo è
+// già (vedi scrollElementIntoViewSmooth in tools/browser/pageInspection.js),
+// poi attende che la posizione risultante si sia stabilizzata (vedi
+// waitForElementStable in tools/browser/humanInteraction.js) prima di
+// proseguire: quella stessa attesa, pensata originariamente per un elemento
+// ancora in transizione per conto proprio (un menu che si apre, un banner
+// che si sposta), qui assorbe altrettanto bene l'animazione dello scroll
+// appena avviato, senza bisogno di una logica dedicata.
+async function bringElementIntoViewSmoothly(page, selector) {
+  await scrollElementIntoViewSmooth(page, selector);
+  await waitForElementStable(page, selector);
+}
+
 // Esegue una singola interazione sulla pagina, in base al suo tipo. Il
 // click e la digitazione in un campo non avvengono in modo istantaneo:
 // prima viene calcolato il punto esatto dell'elemento coinvolto, poi il
@@ -196,6 +210,7 @@ async function runAction(page, step, cursorState) {
       // trovarsi più nel punto calcolato nel momento in cui il click
       // avviene davvero.
       await waitForElementStable(page, step.selector);
+      await bringElementIntoViewSmoothly(page, step.selector);
       const target = await locateActionTarget(page, step.selector);
       await moveMouseHumanLike(page, cursorState, target.x, target.y, target.width);
       await page.evaluate(() => window.__clipdevCursorClick?.());
@@ -210,6 +225,7 @@ async function runAction(page, step, cursorState) {
     }
     case "fill": {
       await waitForElementStable(page, step.selector);
+      await bringElementIntoViewSmoothly(page, step.selector);
       const target = await locateActionTarget(page, step.selector);
       await moveMouseHumanLike(page, cursorState, target.x, target.y, target.width);
       await page.evaluate(() => window.__clipdevCursorClick?.());
@@ -259,6 +275,7 @@ async function runAction(page, step, cursorState) {
       // letta qui, non riusando locateActionTarget (pensato per un singolo
       // punto centrale, non per un intero binario di trascinamento).
       await waitForElementStable(page, step.selector);
+      await bringElementIntoViewSmoothly(page, step.selector);
       const locator = page.locator(step.selector).first();
       await locator.scrollIntoViewIfNeeded({ timeout: 10_000 });
       const box = await locator.boundingBox();

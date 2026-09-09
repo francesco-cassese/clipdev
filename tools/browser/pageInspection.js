@@ -156,6 +156,36 @@ export async function waitForImagesToLoad(page, timeoutMs = 15_000) {
   }
 }
 
+// Porta l'elemento indicato nella parte visibile dello schermo, se non lo è
+// già, scorrendo la pagina in modo dolce invece che di scatto. Usata da
+// runAction (tools/browser/recordDemoTool.js) subito prima di
+// locateActionTarget più sotto: quest'ultima si affida a
+// locator.scrollIntoViewIfNeeded(), che sposta la pagina istantaneamente —
+// corretto quando l'elemento è già visibile (in quel caso non fa nulla), ma
+// se non lo è produce nel video uno scatto innaturale (difetto osservato
+// concretamente: un elemento sotto la piega che va raggiunto scorrendo fa
+// letteralmente saltare la pagina in vista in un solo fotogramma). Questa
+// funzione previene il caso chiamando prima lo scroll nativo del browser con
+// `behavior: "smooth"`: l'opzione standard, supportata anche in modalità
+// headless, pensata esattamente per questo (a differenza di
+// scrollPageSmooth in tools/browser/humanInteraction.js, che simula lo
+// scroll con eventi di rotellina del mouse e scorrerebbe il contenitore che
+// si trova sotto la posizione ATTUALE del cursore, non necessariamente
+// quello dell'elemento — un rischio evitabile qui, dove si sa esattamente
+// quale elemento va portato in vista). `block: "nearest"` (invece del
+// default "center") riproduce lo stesso criterio di scroll minimo di
+// scrollIntoViewIfNeeded, che resta comunque chiamata subito dopo da chi usa
+// questa funzione come rete di sicurezza finale (ad esempio per un elemento
+// dentro un contenitore con scroll proprio, che lo scroll della finestra da
+// solo non risolverebbe). Non attende che l'animazione sia terminata: chi
+// chiama questa funzione deve farlo con waitForElementStable più sotto, che
+// esiste già per questo scopo.
+export async function scrollElementIntoViewSmooth(page, selector) {
+  await page.locator(selector).first().evaluate((el) => {
+    el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  });
+}
+
 // Individua sulla pagina il punto centrale di un elemento identificato da
 // un selettore, dopo essersi assicurato che sia visibile nello schermo.
 // Serve sia per i click sia per la digitazione nei campi di testo (vedi
