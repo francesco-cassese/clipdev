@@ -19,7 +19,9 @@ Per ogni esecuzione, ClipDev crea quattro file:
 
 Video generato da ClipDev, senza interventi manuali, per **BoolFlix**, un'applicazione React in stile Netflix per cercare film e serie TV con dati in tempo reale dalle TMDB API — esportato in formato quadrato (`--canvas=square`) per il feed mobile:
 
-![Esempio di video generato da ClipDev](docs/demo.gif)
+<p align="center">
+  <img src="docs/demo.gif" alt="Esempio di video generato da ClipDev">
+</p>
 
 La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale, senza alcun elemento inventato): digitazione di una query nella barra di ricerca, click sul pulsante "Ricerca", apertura della card di un risultato, passaggio alla pagina di dettaglio e scorrimento per mostrarne il resto — con le callout testuali sincronizzate ("Righe scorrevoli Netflix-style", "Ricerca combinata film+TV"...) lette dalla scaletta dell'Analyst Agent e sovrimpresse in fase di montaggio. La GIF sopra è una versione compressa; il video originale in piena qualità (1080×1080) è in [`docs/demo.mp4`](docs/demo.mp4).
 
