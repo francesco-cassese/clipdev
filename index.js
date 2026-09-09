@@ -23,22 +23,32 @@
 // import viene caricato, prima che qualunque altra riga di questo file
 // venga eseguita.
 import { runClipDevPipeline } from "./pipeline/clipDevPipeline.js";
+import { CanvasFormatSchema, DEFAULT_CANVAS_FORMAT } from "./tools/browser/recordingConfig.js";
 
 // Parametri letti da riga di comando, nell'ordine in cui vanno indicati.
 // La lista di interazioni da mostrare nel video (click, digitazione, ecc.)
 // non è configurabile da qui, perché richiede dettagli troppo tecnici
 // (i punti esatti della pagina su cui agire) per essere scritta a mano in
 // un comando da terminale: chi vuole controllarla manualmente deve usare
-// ClipDev come libreria, non da riga di comando.
-const [projectName, projectSummary, url] = process.argv.slice(2);
+// ClipDev come libreria, non da riga di comando. Il quarto parametro
+// (formato canvas) è invece facoltativo, perché ha un default sensato.
+const [projectName, projectSummary, url, canvasFormatArg] = process.argv.slice(2);
 
 if (!projectName || !projectSummary || !url) {
   console.error(
-    "Uso: node index.js <projectName> <projectSummary> <url>\n" +
-      'Esempio: node index.js "ClipDev Demo" "App Node.js che genera outline e post LinkedIn da un progetto" "http://localhost:3000"'
+    "Uso: node index.js <projectName> <projectSummary> <url> [canvasFormat]\n" +
+      'Esempio: node index.js "ClipDev Demo" "App Node.js che genera outline e post LinkedIn da un progetto" "http://localhost:3000"\n' +
+      '[canvasFormat] è facoltativo: "widescreen" (default, feed desktop) o "square" (feed mobile).'
   );
   process.exit(1);
 }
+
+const canvasFormatResult = CanvasFormatSchema.safeParse(canvasFormatArg ?? DEFAULT_CANVAS_FORMAT);
+if (!canvasFormatResult.success) {
+  console.error(`Il quarto parametro deve essere "widescreen" o "square" (ricevuto: "${canvasFormatArg}")`);
+  process.exit(1);
+}
+const canvasFormat = canvasFormatResult.data;
 
 try {
   // La generazione della demo gestisce già al suo interno gli errori di
@@ -47,14 +57,17 @@ try {
   // un eventuale fallimento complessivo e segnalarlo con un codice di
   // uscita diverso da zero, utile se questo script viene lanciato in modo
   // automatico (ad esempio da un altro script o da un sistema di CI).
-  const result = await runClipDevPipeline({ projectName, projectSummary, url });
+  const result = await runClipDevPipeline({ projectName, projectSummary, url, canvasFormat });
 
   console.log("Pipeline completata con successo.\n");
-  console.log(`Outline salvato in:   ${result.files.outlinePath}`);
-  console.log(`Video salvato in:     ${result.files.videoPath}`);
-  console.log(`Post LinkedIn salvato in: ${result.files.socialPostPath}\n`);
-  console.log("--- Post LinkedIn generato ---\n");
-  console.log(result.socialPost);
+  console.log(`Outline salvato in:                ${result.files.outlinePath}`);
+  console.log(`Video salvato in:                  ${result.files.videoPath}`);
+  console.log(`Post LinkedIn (variante A) in:      ${result.files.socialPostVariantAPath}`);
+  console.log(`Post LinkedIn (variante B) in:      ${result.files.socialPostVariantBPath}\n`);
+  console.log("--- Variante A: Ingegneristica/Storytelling ---\n");
+  console.log(result.socialPostVariantA);
+  console.log("\n--- Variante B: Product Showcase ---\n");
+  console.log(result.socialPostVariantB);
 } catch (error) {
   console.error(`Pipeline fallita: ${error.message}`);
   process.exit(1);

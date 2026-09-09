@@ -21,6 +21,7 @@ import {
   safeCloseBrowser,
 } from "../tools/browser/recordDemoTool.js";
 import { extractInteractiveElements, getPageOverflowInfo } from "../tools/browser/pageInspection.js";
+import { DEFAULT_CANVAS_FORMAT } from "../tools/browser/recordingConfig.js";
 
 // Durata massima indicativa del video, in linea con quanto indicato
 // all'Analyst Agent. Serve come riferimento per decidere quando smettere
@@ -108,6 +109,9 @@ export async function runClipDevPipeline({
   actions = [],
   headless = true,
   minDurationMs,
+  // "widescreen" (default, feed desktop) o "square" (feed mobile): vedi
+  // CANVAS_FORMATS in tools/browser/recordingConfig.js.
+  canvasFormat = DEFAULT_CANVAS_FORMAT,
 }) {
   // I parametri ricevuti vengono controllati subito, prima di avviare
   // qualunque parte del processo: è preferibile segnalare un errore chiaro
@@ -356,12 +360,35 @@ export async function runClipDevPipeline({
     throw new Error(`Registrazione video fallita: ${error.message}`);
   }
 
+  // Le callout testuali da sovrimprimere in fase di montaggio (vedi
+  // tools/browser/videoTranscode.js) vengono lette qui direttamente
+  // dall'outline: solo le sezioni per cui l'Analyst Agent ha effettivamente
+  // stimato sia il testo sia entrambi i timestamp vengono incluse, le altre
+  // vengono semplicemente saltate invece di far fallire l'intero video per
+  // una singola sezione senza questi dati (facoltativi anche in
+  // OutlineSectionSchema, vedi tools/saveOutputTool.js, per lo stesso
+  // motivo).
+  const callouts = outline.sections
+    .filter(
+      (section) =>
+        section.calloutText !== undefined &&
+        section.calloutStartSeconds !== undefined &&
+        section.calloutEndSeconds !== undefined
+    )
+    .map((section) => ({
+      text: section.calloutText,
+      startSeconds: section.calloutStartSeconds,
+      endSeconds: section.calloutEndSeconds,
+    }));
+
   const videoResult = await finalizeClipDevRecording({
     ...recordingSession,
     outputPath: `${projectSlug}/demo.mp4`,
     minDurationMs,
     hadActions,
     cutRanges,
+    callouts,
+    canvasFormat,
   });
   if (!videoResult.success) {
     throw new Error(`Registrazione video fallita: ${videoResult.error}`);
@@ -395,37 +422,55 @@ export async function runClipDevPipeline({
     throw new Error(`Copywriter Agent fallito: ${copywriterOutcome.reason.message}`);
   }
 
-  // Il Copywriter produce testo libero, non dati strutturati: il testo
-  // finale viene quindi estratto dall'ultimo messaggio della risposta.
-  const lastMessage = copywriterOutcome.value.messages.at(-1);
-  const socialPost = lastMessage?.text?.trim();
-  if (!socialPost) {
-    throw new Error("Copywriter Agent: nessun post generato.");
+  // Grazie al formato di risposta imposto al Copywriter Agent (vedi
+  // CopywriterOutputSchema in ai/agents/copywriterAgent.js), il risultato è
+  // già una struttura dati validata con le due varianti richieste, non un
+  // testo libero da cui doverle separare con un'analisi testuale fragile.
+  const copywriterOutput = copywriterOutcome.value.structuredResponse;
+  if (!copywriterOutput) {
+    throw new Error("Copywriter Agent: nessuna risposta strutturata restituita.");
   }
 
   // FASE 3 — Questo è l'unico passaggio rimasto in sequenza: dipende
   // direttamente dal testo appena ottenuto dal Copywriter, quindi non può
-  // iniziare prima che quel testo sia disponibile.
-  const postSave = await saveClipDevOutput({
-    type: "social-post",
-    projectSlug,
-    content: socialPost,
-  });
-  if (!postSave.success) {
-    throw new Error(`Salvataggio post fallito: ${postSave.error}`);
+  // iniziare prima che quel testo sia disponibile. Le due varianti vengono
+  // salvate come due file distinti (invece che un solo file con entrambe
+  // concatenate) così chi pubblica può aprire, confrontare e scegliere
+  // quella più adatta al momento senza dover prima separare manualmente i
+  // due testi.
+  const [postSaveA, postSaveB] = await Promise.all([
+    saveClipDevOutput({
+      type: "social-post",
+      projectSlug: `${projectSlug}-variante-a`,
+      content: copywriterOutput.variantA.post,
+    }),
+    saveClipDevOutput({
+      type: "social-post",
+      projectSlug: `${projectSlug}-variante-b`,
+      content: copywriterOutput.variantB.post,
+    }),
+  ]);
+  if (!postSaveA.success) {
+    throw new Error(`Salvataggio post (variante A) fallito: ${postSaveA.error}`);
+  }
+  if (!postSaveB.success) {
+    throw new Error(`Salvataggio post (variante B) fallito: ${postSaveB.error}`);
   }
 
   // FASE 4 — Risultato finale restituito a chi ha avviato il processo:
-  // include sia i dati intermedi (l'outline) sia il risultato finale (il
-  // post) sia i percorsi di tutti e tre i file salvati (outline, post,
-  // video), così non è necessario rileggere nulla da disco per accedervi.
+  // include sia i dati intermedi (l'outline) sia il risultato finale (le
+  // due varianti del post) sia i percorsi di tutti i file salvati (outline,
+  // le due varianti del post, video), così non è necessario rileggere nulla
+  // da disco per accedervi.
   return {
     projectSlug,
     outline,
-    socialPost,
+    socialPostVariantA: copywriterOutput.variantA.post,
+    socialPostVariantB: copywriterOutput.variantB.post,
     files: {
       outlinePath: outlineSave.path,
-      socialPostPath: postSave.path,
+      socialPostVariantAPath: postSaveA.path,
+      socialPostVariantBPath: postSaveB.path,
       videoPath: videoResult.videoPath,
     },
   };

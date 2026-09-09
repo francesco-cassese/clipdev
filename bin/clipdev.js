@@ -16,6 +16,7 @@ import path from "node:path";
 import os from "node:os";
 
 import { parseFlags, guessDevServerUrl } from "../tools/projectDetection.js";
+import { CanvasFormatSchema, DEFAULT_CANVAS_FORMAT } from "../tools/browser/recordingConfig.js";
 
 // Carica la chiave API da un file nella cartella personale dell'utente
 // (~/.clipdev.env), non dalla cartella dove è installato ClipDev. Questo è
@@ -214,6 +215,15 @@ if (flags.duration) {
   }
 }
 
+// `--canvas=widescreen` (default, feed desktop) oppure `--canvas=square`
+// (feed mobile): vedi CANVAS_FORMATS in tools/browser/recordingConfig.js.
+const canvasFormatResult = CanvasFormatSchema.safeParse(flags.canvas ?? DEFAULT_CANVAS_FORMAT);
+if (!canvasFormatResult.success) {
+  console.error(`--canvas deve essere "widescreen" o "square" (ricevuto: "${flags.canvas}")`);
+  process.exit(1);
+}
+const canvasFormat = canvasFormatResult.data;
+
 try {
   console.log(`\nProgetto rilevato: "${projectName}"`);
   console.log(`Registro la demo da: ${url}\n`);
@@ -227,17 +237,20 @@ try {
   // comunque interazioni vere, non solo la pagina ferma. Chi vuole
   // controllare le interazioni manualmente deve usare ClipDev come
   // libreria all'interno del proprio codice.
-  const result = await runClipDevPipeline({ projectName, projectSummary, url, headless, minDurationMs });
+  const result = await runClipDevPipeline({ projectName, projectSummary, url, headless, minDurationMs, canvasFormat });
 
   // I percorsi dei file restituiti sono relativi alla cartella del
   // progetto target: outline, video e post finiscono dentro il progetto
   // che si sta presentando, non dentro l'installazione di ClipDev.
   console.log("Pipeline completata con successo.\n");
-  console.log(`Outline salvato in:       ${result.files.outlinePath}`);
-  console.log(`Video salvato in:         ${result.files.videoPath}`);
-  console.log(`Post LinkedIn salvato in: ${result.files.socialPostPath}\n`);
-  console.log("--- Post LinkedIn generato ---\n");
-  console.log(result.socialPost);
+  console.log(`Outline salvato in:                ${result.files.outlinePath}`);
+  console.log(`Video salvato in:                  ${result.files.videoPath}`);
+  console.log(`Post LinkedIn (variante A) in:      ${result.files.socialPostVariantAPath}`);
+  console.log(`Post LinkedIn (variante B) in:      ${result.files.socialPostVariantBPath}\n`);
+  console.log("--- Variante A: Ingegneristica/Storytelling ---\n");
+  console.log(result.socialPostVariantA);
+  console.log("\n--- Variante B: Product Showcase ---\n");
+  console.log(result.socialPostVariantB);
 } catch (error) {
   console.error(`Pipeline fallita: ${error.message}`);
   process.exit(1);
