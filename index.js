@@ -23,32 +23,50 @@
 // import viene caricato, prima che qualunque altra riga di questo file
 // venga eseguita.
 import { runClipDevPipeline } from "./pipeline/clipDevPipeline.js";
-import { CanvasFormatSchema, DEFAULT_CANVAS_FORMAT } from "./tools/browser/recordingConfig.js";
+import { CANVAS_FORMATS, CanvasFormatSchema, DEFAULT_CANVAS_FORMAT } from "./tools/browser/recordingConfig.js";
 
 // Parametri letti da riga di comando, nell'ordine in cui vanno indicati.
 // La lista di interazioni da mostrare nel video (click, digitazione, ecc.)
 // non è configurabile da qui, perché richiede dettagli troppo tecnici
 // (i punti esatti della pagina su cui agire) per essere scritta a mano in
 // un comando da terminale: chi vuole controllarla manualmente deve usare
-// ClipDev come libreria, non da riga di comando. Il quarto parametro
-// (formato canvas) è invece facoltativo, perché ha un default sensato.
-const [projectName, projectSummary, url, canvasFormatArg] = process.argv.slice(2);
+// ClipDev come libreria, non da riga di comando. Il quarto e quinto
+// parametro sono invece facoltativi, perché hanno un default sensato.
+const [projectName, projectSummary, url, canvasFormatArg, mobileRecordingArg] = process.argv.slice(2);
+
+// L'elenco dei formati validi nei due messaggi sotto è derivato da
+// CANVAS_FORMATS invece che ripetuto a mano, per non rischiare che i due
+// finiscano per divergere quando in futuro si aggiunge un formato (vedi lo
+// stesso principio in bin/clipdev.js).
+const validCanvasFormats = Object.keys(CANVAS_FORMATS).map((format) => `"${format}"`).join(", ");
 
 if (!projectName || !projectSummary || !url) {
   console.error(
-    "Uso: node index.js <projectName> <projectSummary> <url> [canvasFormat]\n" +
+    "Uso: node index.js <projectName> <projectSummary> <url> [canvasFormat] [mobileRecording]\n" +
       'Esempio: node index.js "ClipDev Demo" "App Node.js che genera outline e post LinkedIn da un progetto" "http://localhost:3000"\n' +
-      '[canvasFormat] è facoltativo: "widescreen" (default, feed desktop) o "square" (feed mobile).'
+      `[canvasFormat] è facoltativo: uno tra ${validCanvasFormats}; se omesso, il default dipende da [mobileRecording] ` +
+      `("vertical" se true, "${DEFAULT_CANVAS_FORMAT}" altrimenti).\n` +
+      '[mobileRecording] è facoltativo: "true" registra con il viewport di un vero dispositivo mobile invece che a ' +
+      "risoluzione desktop, per mostrare il vero layout responsive (default: false)."
   );
   process.exit(1);
 }
 
-const canvasFormatResult = CanvasFormatSchema.safeParse(canvasFormatArg ?? DEFAULT_CANVAS_FORMAT);
-if (!canvasFormatResult.success) {
-  console.error(`Il quarto parametro deve essere "widescreen" o "square" (ricevuto: "${canvasFormatArg}")`);
-  process.exit(1);
+// A differenza di canvasFormatArg, qui non viene applicato alcun default:
+// se non indicato esplicitamente resta `undefined`, ed è runClipDevPipeline
+// a scegliere il valore giusto in base a mobileRecording (vedi il commento
+// nella sua firma, in pipeline/clipDevPipeline.js), invece di forzarlo qui a
+// "widescreen" a prescindere.
+let canvasFormat;
+if (canvasFormatArg !== undefined) {
+  const canvasFormatResult = CanvasFormatSchema.safeParse(canvasFormatArg);
+  if (!canvasFormatResult.success) {
+    console.error(`Il quarto parametro deve essere uno tra ${validCanvasFormats} (ricevuto: "${canvasFormatArg}")`);
+    process.exit(1);
+  }
+  canvasFormat = canvasFormatResult.data;
 }
-const canvasFormat = canvasFormatResult.data;
+const mobileRecording = mobileRecordingArg === "true";
 
 try {
   // La generazione della demo gestisce già al suo interno gli errori di
@@ -57,7 +75,7 @@ try {
   // un eventuale fallimento complessivo e segnalarlo con un codice di
   // uscita diverso da zero, utile se questo script viene lanciato in modo
   // automatico (ad esempio da un altro script o da un sistema di CI).
-  const result = await runClipDevPipeline({ projectName, projectSummary, url, canvasFormat });
+  const result = await runClipDevPipeline({ projectName, projectSummary, url, canvasFormat, mobileRecording });
 
   console.log("Pipeline completata con successo.\n");
   console.log(`Outline salvato in:                ${result.files.outlinePath}`);

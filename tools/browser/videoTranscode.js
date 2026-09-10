@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as z from "zod";
 
-import { CANVAS_FORMATS, CanvasFormatSchema, DEFAULT_CANVAS_FORMAT, VIDEO_HEIGHT, VIDEO_WIDTH } from "./recordingConfig.js";
+import { CANVAS_FORMATS, CanvasFormatSchema, DEFAULT_CANVAS_FORMAT } from "./recordingConfig.js";
 
 // --- Callout testuali --------------------------------------------------------
 //
@@ -131,13 +131,13 @@ function buildCalloutFilter({ text, startSeconds, endSeconds }, fontPath) {
   );
 }
 
-// --- Canvas quadrato per il feed mobile --------------------------------------
+// --- Canvas incorniciato per il feed mobile (quadrato o verticale) -----------
 //
-// La viewport 16:9 registrata viene rimpicciolita e incapsulata al centro
-// di un canvas 1080x1080, con angoli arrotondati, una leggera ombra e uno
-// sfondo scuro minimale — pensato per il feed mobile di LinkedIn, dove un
-// video 1:1 occupa più spazio verticale nello schermo rispetto a un
-// widescreen "a bande nere".
+// La viewport 16:9 registrata viene ritagliata al centro e incapsulata in un
+// canvas più stretto/alto (1:1 o 4:5), con angoli arrotondati, una leggera
+// ombra e uno sfondo scuro minimale attorno — pensato per il feed mobile di
+// LinkedIn (vedi CANVAS_FORMATS in tools/browser/recordingConfig.js per il
+// perché di ciascun formato).
 
 const CANVAS_CORNER_RADIUS_PX = 28;
 const CANVAS_BG_COLOR = "0x141414";
@@ -171,39 +171,60 @@ function roundToEven(value) {
   return rounded - (rounded % 2);
 }
 
-// Calcola le dimensioni, sempre pari, a cui ridurre la viewport 16:9
-// registrata perché entri, con il margine per l'ombra, nel canvas quadrato
-// di destinazione — mantenendo le sue proporzioni originali.
-function computeFramedViewportSize(canvasWidth) {
+// Calcola le dimensioni, sempre pari, del riquadro incorniciato dentro il
+// canvas di destinazione: il margine (per lo spazio all'ombra attorno)
+// viene applicato su ENTRAMBE le dimensioni in proporzione al canvas
+// stesso, non alla viewport 16:9 registrata — il riquadro risultante ha
+// quindi le stesse proporzioni del canvas (1:1 per "square", 4:5 per
+// "vertical"), non quelle della registrazione originale. È deliberato: se
+// si mantenessero le proporzioni 16:9 della registrazione (come faceva una
+// versione precedente di questa funzione), il riquadro risulterebbe molto
+// più basso del canvas stesso, lasciando bande vuote sopra e sotto — un
+// difetto concretamente osservato (su un canvas 1:1, il riquadro copriva
+// solo il 52% circa dell'altezza). Il contenuto viene invece adattato a
+// QUESTO riquadro con un ritaglio centrato (vedi buildFramedCanvasStages
+// più sotto), non con un semplice ridimensionamento.
+function computeFramedViewportSize(canvasWidth, canvasHeight) {
   const frameWidth = roundToEven(canvasWidth * CANVAS_FRAME_MARGIN_RATIO);
-  const frameHeight = roundToEven((frameWidth * VIDEO_HEIGHT) / VIDEO_WIDTH);
+  const frameHeight = roundToEven(canvasHeight * CANVAS_FRAME_MARGIN_RATIO);
   return { frameWidth, frameHeight };
 }
 
-// Costruisce la sequenza di filtri che compongono il canvas quadrato,
-// operando sul pad d'ingresso indicato (l'esito del taglio/delle callout, o
-// direttamente il video originale se nessuno dei due è stato richiesto).
-// Angoli arrotondati e ombra vengono calcolati UNA SOLA VOLTA, su un
-// singolo fotogramma statico (le maschere non dipendono dal contenuto, solo
-// dalle dimensioni fisse del frame), invece che rivalutati ad ogni
-// fotogramma del video: `alphamerge` ripete automaticamente l'unico
-// fotogramma della maschera finché il flusso video reale non termina
-// (comportamento di default della libreria di sincronizzazione dei filtri
-// di ffmpeg), quindi l'espressione geq — la parte più costosa in termini di
-// tempo di calcolo — non viene mai rivalutata sui singoli fotogrammi del
-// video vero e proprio: un risparmio concreto su un video di 15-30 secondi
-// (centinaia di fotogrammi), verificato empiricamente prima di scrivere
-// questo codice.
-function buildSquareCanvasStages(inputPad, canvasWidth, canvasHeight) {
-  const { frameWidth, frameHeight } = computeFramedViewportSize(canvasWidth);
+// Costruisce la sequenza di filtri che compongono il canvas incorniciato
+// (usata sia per "square" sia per "vertical", vedi CANVAS_FORMATS in
+// tools/browser/recordingConfig.js), operando sul pad d'ingresso indicato
+// (l'esito del taglio/delle callout, o direttamente il video originale se
+// nessuno dei due è stato richiesto). Angoli arrotondati e ombra vengono
+// calcolati UNA SOLA VOLTA, su un singolo fotogramma statico (le maschere
+// non dipendono dal contenuto, solo dalle dimensioni fisse del frame),
+// invece che rivalutati ad ogni fotogramma del video: `alphamerge` ripete
+// automaticamente l'unico fotogramma della maschera finché il flusso video
+// reale non termina (comportamento di default della libreria di
+// sincronizzazione dei filtri di ffmpeg), quindi l'espressione geq — la
+// parte più costosa in termini di tempo di calcolo — non viene mai
+// rivalutata sui singoli fotogrammi del video vero e proprio: un risparmio
+// concreto su un video di 15-30 secondi (centinaia di fotogrammi),
+// verificato empiricamente prima di scrivere questo codice.
+function buildFramedCanvasStages(inputPad, canvasWidth, canvasHeight) {
+  const { frameWidth, frameHeight } = computeFramedViewportSize(canvasWidth, canvasHeight);
   const roundedAlpha = buildRoundedRectAlphaExpr(CANVAS_CORNER_RADIUS_PX);
 
   return [
-    `${inputPad}scale=${frameWidth}:${frameHeight}[squareScaled]`,
+    // "scale...force_original_aspect_ratio=increase,crop=..." è l'idioma
+    // standard di ffmpeg per un ritaglio "a copertura" (l'equivalente di
+    // object-fit: cover in CSS): la registrazione 16:9 viene ingrandita
+    // finché non copre per intero il riquadro (frameWidth x frameHeight,
+    // che ha proporzioni diverse da 16:9), poi l'eccedenza viene ritagliata
+    // centrata. Il riquadro risulta così sempre riempito per intero, senza
+    // bande vuote, al costo di mostrare solo la parte centrale della
+    // pagina registrata — motivo per cui il Director Agent (vedi
+    // ai/agents/directorAgent.js) predilige già elementi posizionati al
+    // centro dello schermo, non ai bordi.
+    `${inputPad}scale=${frameWidth}:${frameHeight}:force_original_aspect_ratio=increase,crop=${frameWidth}:${frameHeight}[framedScaled]`,
     `color=c=white:s=${frameWidth}x${frameHeight}:d=0.04[cornerMaskBase]`,
     `[cornerMaskBase]geq=lum='${roundedAlpha}'[cornerMask]`,
-    `[squareScaled]format=yuva420p[squareScaledFmt]`,
-    `[squareScaledFmt][cornerMask]alphamerge[framedViewport]`,
+    `[framedScaled]format=yuva420p[framedScaledFmt]`,
+    `[framedScaledFmt][cornerMask]alphamerge[framedViewport]`,
     `color=c=black:s=${frameWidth}x${frameHeight}:d=0.04[shadowMaskBase]`,
     `[shadowMaskBase]geq=lum='${roundedAlpha}',gblur=sigma=${SHADOW_BLUR_SIGMA}[shadowMask]`,
     `color=c=black:s=${frameWidth}x${frameHeight}:d=0.04[shadowRgbBase]`,
@@ -299,24 +320,24 @@ export function transcodeToMp4(inputWebmPath, outputMp4Path, options = {}) {
 
     const args = ["-y", "-i", inputWebmPath]; // -y: sovrascrive il file di destinazione se esiste già, senza chiedere conferma
 
-    if (parsedCanvasFormat === "square") {
-      const { width: canvasWidth, height: canvasHeight } = CANVAS_FORMATS.square;
+    if (parsedCanvasFormat !== "widescreen") {
+      const { width: canvasWidth, height: canvasHeight } = CANVAS_FORMATS[parsedCanvasFormat];
 
       // Se un taglio o delle callout sono stati richiesti, vengono applicati
-      // PRIMA di ridurre il fotogramma per il canvas quadrato: le callout,
+      // PRIMA di incorniciare il fotogramma nel canvas mobile: le callout,
       // in particolare, vengono così "bruciate" alla risoluzione originale
-      // 1920x1080 e solo dopo rimpicciolite insieme al resto della
-      // viewport, restando nitide e proporzionate esattamente come nel
-      // formato widescreen, senza bisogno di una dimensione del testo
-      // diversa per ciascun formato.
+      // 1920x1080 e solo dopo ritagliate insieme al resto della viewport,
+      // restando nitide e proporzionate esattamente come nel formato
+      // widescreen, senza bisogno di una dimensione del testo diversa per
+      // ciascun formato.
       const preparedTag = stages.length > 0 ? "[prepared]" : "[0:v]";
       const preparedStage = stages.length > 0 ? [`[0:v]${stages.join(",")}${preparedTag}`] : [];
 
-      const squareStages = buildSquareCanvasStages(preparedTag, canvasWidth, canvasHeight);
-      const lastIndex = squareStages.length - 1;
-      squareStages[lastIndex] = `${squareStages[lastIndex]}[vout]`;
+      const framedStages = buildFramedCanvasStages(preparedTag, canvasWidth, canvasHeight);
+      const lastIndex = framedStages.length - 1;
+      framedStages[lastIndex] = `${framedStages[lastIndex]}[vout]`;
 
-      const filterComplex = [...preparedStage, ...squareStages].join(";");
+      const filterComplex = [...preparedStage, ...framedStages].join(";");
       args.push("-filter_complex", filterComplex, "-map", "[vout]");
     } else if (stages.length > 0) {
       args.push("-filter_complex", `[0:v]${stages.join(",")}[vout]`, "-map", "[vout]");

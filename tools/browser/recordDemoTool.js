@@ -14,7 +14,14 @@ import { chromium } from "playwright";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
-import { CanvasFormatSchema, DEFAULT_CANVAS_FORMAT, VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
+import {
+  CanvasFormatSchema,
+  DEFAULT_CANVAS_FORMAT,
+  MOBILE_DEVICE,
+  MOBILE_RECORD_VIDEO_SIZE,
+  VIDEO_WIDTH,
+  VIDEO_HEIGHT,
+} from "./recordingConfig.js";
 import {
   CURSOR_INIT_SCRIPT,
   dragSliderHumanLike,
@@ -296,6 +303,20 @@ async function runAction(page, step, cursorState) {
   }
 }
 
+// Opzioni di contesto (viewport, pixel ratio, user agent, touch) da passare
+// a browser.newContext(), condivise da inspectClipDevPage e
+// startClipDevRecording sotto perché entrambe devono aprire la pagina nello
+// STESSO ambiente — altrimenti l'elenco di elementi individuato in fase di
+// analisi (layout desktop) non corrisponderebbe più a quello realmente
+// disponibile in fase di registrazione (layout mobile), o viceversa.
+// `mobileRecording` true usa il preset di dispositivo reale (vedi
+// MOBILE_DEVICE in tools/browser/recordingConfig.js), per mostrare il vero
+// layout responsive invece del desktop poi semplicemente ritagliato (vedi
+// CANVAS_FORMATS, che da solo non cambia il layout mostrato).
+function buildBrowserContextOptions(mobileRecording) {
+  return mobileRecording ? { ...MOBILE_DEVICE } : { viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT } };
+}
+
 // Chiude il browser in modo sicuro: se la chiusura stessa dovesse fallire
 // (ad esempio perché il browser si è già arrestato per conto proprio), il
 // problema viene registrato ma non interrompe il resto del programma —
@@ -332,10 +353,11 @@ export async function safeCloseBrowser(browser) {
 export async function inspectClipDevPage(rawInput) {
   const url = TargetUrlSchema.parse(rawInput.url);
   const headless = rawInput.headless ?? true;
+  const mobileRecording = rawInput.mobileRecording ?? false;
 
   const browser = await chromium.launch({ headless });
   try {
-    const context = await browser.newContext({ viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT } });
+    const context = await browser.newContext(buildBrowserContextOptions(mobileRecording));
     const page = await context.newPage();
 
     // Il tracciamento delle richieste di rete deve partire PRIMA della
@@ -382,7 +404,7 @@ export async function inspectClipDevPage(rawInput) {
       console.error(`Chiusura del contesto di ispezione fallita (ignorata): ${closeError.message}`);
     }
 
-    return { browser, url, headless, elements, overflow };
+    return { browser, url, headless, mobileRecording, elements, overflow };
   } catch (error) {
     await safeCloseBrowser(browser);
     throw error;
@@ -398,17 +420,23 @@ export async function inspectClipDevPage(rawInput) {
 // sotto) perché chi coordina il processo deve poter esaminare la pagina e
 // i suoi elementi prima di decidere cosa fare — decisione che ora avviene
 // prima di questa fase, non più a registrazione già iniziata.
-export async function startClipDevRecording({ browser, url }) {
+export async function startClipDevRecording({ browser, url, mobileRecording = false }) {
   await mkdir(RAW_VIDEO_DIR, { recursive: true });
 
   try {
     // Viene creata una nuova sessione del browser con le dimensioni
-    // corrette e la registrazione video attivata.
+    // corrette e la registrazione video attivata. La dimensione del video
+    // registrato segue lo stesso ramo mobile/desktop del contesto: per il
+    // dispositivo mobile viene usata la sua risoluzione fisica reale (vedi
+    // MOBILE_RECORD_VIDEO_SIZE in tools/browser/recordingConfig.js), non
+    // quella desktop, altrimenti il fotogramma verrebbe rimpicciolito
+    // (mai ingrandito: vedi il commento su MOBILE_RECORD_VIDEO_SIZE) fino a
+    // un formato diverso da quello nativo del dispositivo.
     const context = await browser.newContext({
-      viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+      ...buildBrowserContextOptions(mobileRecording),
       recordVideo: {
         dir: RAW_VIDEO_DIR,
-        size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+        size: mobileRecording ? MOBILE_RECORD_VIDEO_SIZE : { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
       },
     });
 

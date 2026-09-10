@@ -184,9 +184,24 @@ export async function runClipDevPipeline({
   actions = [],
   headless = true,
   minDurationMs,
-  // "widescreen" (default, feed desktop) o "square" (feed mobile): vedi
-  // CANVAS_FORMATS in tools/browser/recordingConfig.js.
-  canvasFormat = DEFAULT_CANVAS_FORMAT,
+  // "widescreen" (default, feed desktop), "square" o "vertical" (feed
+  // mobile): vedi CANVAS_FORMATS in tools/browser/recordingConfig.js.
+  // Nessun default fisso qui (a differenza degli altri parametri sopra):
+  // quando non viene indicato esplicitamente, il valore giusto dipende da
+  // `mobileRecording` (vedi subito sotto), quindi va risolto nel corpo della
+  // funzione, non in questa firma.
+  canvasFormat,
+  // Registra con il viewport di un vero dispositivo mobile (vedi
+  // MOBILE_DEVICE in tools/browser/recordingConfig.js) invece che a
+  // risoluzione desktop, per mostrare il vero layout responsive — non solo
+  // la stessa pagina desktop ritagliata, che è tutto ciò che fa da solo
+  // canvasFormat "square"/"vertical". Sostituisce del tutto la registrazione
+  // desktop in questa esecuzione (non produce entrambe), quindi costa
+  // esattamente come una registrazione normale, non il doppio: un secondo
+  // giro completo di Director Agent + registrazione servirebbe solo per
+  // ottenere ENTRAMBI i video nella stessa esecuzione, cosa che questa
+  // opzione non fa.
+  mobileRecording = false,
 }) {
   // I parametri ricevuti vengono controllati subito, prima di avviare
   // qualunque parte del processo: è preferibile segnalare un errore chiaro
@@ -200,6 +215,24 @@ export async function runClipDevPipeline({
   }
   if (!url?.trim()) {
     throw new Error("runClipDevPipeline: 'url' è obbligatorio.");
+  }
+
+  // Se non è stato indicato esplicitamente, il formato canvas giusto dipende
+  // da mobileRecording: una registrazione mobile è già verticale di natura,
+  // quindi "vertical" è il default sensato in quel caso, non "widescreen"
+  // (che richiederebbe di ritagliare pesantemente in ALTEZZA un fotogramma
+  // già stretto, perdendo contenuto utile). Un valore esplicito fornito dal
+  // chiamante resta comunque rispettato così com'è.
+  const resolvedCanvasFormat = canvasFormat ?? (mobileRecording ? "vertical" : DEFAULT_CANVAS_FORMAT);
+  if (mobileRecording && resolvedCanvasFormat === "widescreen") {
+    // Combinazione priva di senso, non solo sconsigliata: ritagliare un
+    // fotogramma verticale (il dispositivo mobile) per riempire un canvas
+    // orizzontale 16:9 mostrerebbe una fetta minuscola della pagina.
+    // Segnalato esplicitamente qui invece di lasciar produrre comunque un
+    // video tecnicamente valido ma visivamente inutilizzabile.
+    throw new Error(
+      'runClipDevPipeline: canvasFormat "widescreen" non è compatibile con mobileRecording: true — usa "square" o "vertical".'
+    );
   }
 
   const projectSlug = slugify(projectName);
@@ -232,7 +265,7 @@ export async function runClipDevPipeline({
       { messages: [{ role: "user", content: projectSummary }] },
       { timeout: LLM_CALL_TIMEOUT_MS }
     ),
-    inspectClipDevPage({ url, headless }),
+    inspectClipDevPage({ url, headless, mobileRecording }),
   ]);
 
   // Se l'esame della pagina è andato a buon fine ma qualcos'altro più
@@ -318,7 +351,7 @@ export async function runClipDevPipeline({
   // nel mezzo.
   let recordingSession;
   try {
-    recordingSession = await startClipDevRecording({ browser: inspectedSession.browser, url });
+    recordingSession = await startClipDevRecording({ browser: inspectedSession.browser, url, mobileRecording });
   } catch (error) {
     throw new Error(`Apertura della registrazione video fallita: ${error.message}`);
   }
@@ -488,7 +521,7 @@ export async function runClipDevPipeline({
     hadActions,
     cutRanges,
     callouts,
-    canvasFormat,
+    canvasFormat: resolvedCanvasFormat,
   });
   if (!videoResult.success) {
     throw new Error(`Registrazione video fallita: ${videoResult.error}`);
