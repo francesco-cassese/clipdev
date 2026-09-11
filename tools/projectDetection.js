@@ -79,3 +79,43 @@ export function guessDevServerUrl(pkg) {
   const match = FRAMEWORK_DEFAULT_PORTS.find(({ dep }) => dep in allDeps);
   return match ? `http://localhost:${match.port}` : null;
 }
+
+// --- Rilevamento (indicativo) della rotta di un'entità citata nei requisiti -
+// Parole chiave (italiano/inglese) associate a un tipo di contenuto tipico
+// di un'applicazione web, con le rotte più comuni sotto cui quel contenuto
+// suole trovarsi. Usata per far partire la registrazione direttamente sulla
+// pagina giusta invece di far scoprire all'agente, partendo alla cieca dalla
+// home page, che quella rotta esiste (spesso dietro un menu collassato): se
+// la descrizione del progetto cita un catalogo/dei prodotti, non serve
+// un'AI per sapere che vale la pena provare "/prodotti" o "/products" prima
+// di chiedere a un agente di navigare fin lì da solo. Resta un'ipotesi, non
+// una certezza — per questo ogni candidato viene poi verificato realmente
+// (vedi tryResolveEntityRoute in tools/browser/recordDemoTool.js) prima di
+// essere adottato, invece di essere usato alla cieca.
+const ENTITY_ROUTE_HINTS = [
+  { keywords: ["prodott", "product", "catalog", "shop", "negozio", "store"], paths: ["/prodotti", "/products", "/catalogo", "/catalog", "/shop", "/store"] },
+  { keywords: ["articol", "post", "blog"], paths: ["/blog", "/articoli", "/articles", "/posts"] },
+  { keywords: ["progett", "project", "portfolio"], paths: ["/progetti", "/projects", "/portfolio"] },
+  { keywords: ["contatt", "contact"], paths: ["/contatti", "/contact", "/contacts"] },
+  { keywords: ["servizi", "service"], paths: ["/servizi", "/services"] },
+  { keywords: ["dashboard"], paths: ["/dashboard"] },
+];
+
+// Restituisce le rotte candidate (senza duplicati, nell'ordine dei gruppi
+// sopra) la cui parola chiave compare nel testo fornito (tipicamente la
+// descrizione del progetto data in input all'Analyst Agent). Un array vuoto
+// significa "nessun'ipotesi", non un errore: molti progetti non hanno
+// un'entità di questo tipo, ed è un esito normale quanto trovarne una.
+export function guessEntityRoutePaths(text) {
+  if (!text) return [];
+  const lowerText = text.toLowerCase();
+  const matchedPaths = [];
+  for (const hint of ENTITY_ROUTE_HINTS) {
+    if (hint.keywords.some((keyword) => lowerText.includes(keyword))) {
+      for (const path of hint.paths) {
+        if (!matchedPaths.includes(path)) matchedPaths.push(path);
+      }
+    }
+  }
+  return matchedPaths;
+}
