@@ -31,7 +31,7 @@ ClipDev non è un unico strumento monolitico, ma una sequenza coordinata di pass
 
 1. **Analisi del progetto** — un agente (Claude Haiku 4.5, tramite LangChain.js) legge la descrizione del progetto (testo libero, README, changelog) e la trasforma in una scaletta strutturata per un video breve, seguendo le linee guida ufficiali di LinkedIn per i contenuti video. Per ogni sezione stima anche, quando può farlo con ragionevole sicurezza, una breve callout testuale (4-5 parole al massimo) con i suoi timestamp indicativi, pensata per essere sovrimpressa nel video in fase di montaggio.
 
-2. **Ispezione della pagina** — in parallelo, Playwright apre un browser Chromium che visita l'indirizzo indicato, attende che la pagina sia completamente caricata (non solo il primo evento di caricamento, ma anche eventuali dati richiesti in modo asincrono all'avvio) e individua gli elementi reali con cui si può interagire (pulsanti, link, campi di input) leggendo lo stesso albero di accessibilità consultato dagli screen reader — non solo i tag HTML più comuni, ma anche i controlli costruiti con componenti custom o incapsulati in una Shadow DOM. Se la descrizione del progetto cita un'entità con una rotta tipica (un catalogo di prodotti, un blog, un portfolio...), ClipDev verifica anche se quella rotta è realmente raggiungibile e lo segnala in console, solo a scopo diagnostico: la registrazione parte comunque sempre dalla home page, la baseline che il pubblico deve riconoscere nei primi istanti del video.
+2. **Ispezione della pagina** — in parallelo, Playwright apre un browser Chromium che visita l'indirizzo indicato, attende che la pagina sia completamente caricata (non solo il primo evento di caricamento, ma anche eventuali dati richiesti in modo asincrono all'avvio) e individua gli elementi reali con cui si può interagire (pulsanti, link, campi di input) leggendo lo stesso albero di accessibilità consultato dagli screen reader — non solo i tag HTML più comuni, ma anche i controlli costruiti con componenti custom o incapsulati in una Shadow DOM.
 
 3. **Esplorazione** — un secondo agente (stesso modello, stesso framework) risolve l'intera sequenza di interazioni da mostrare nel video PRIMA di avviare la registrazione vera, un passo alla volta: sceglie una singola interazione (**solo tra gli elementi realmente presenti sulla pagina**, mai inventati), quell'interazione viene eseguita per davvero su una pagina di esplorazione usa-e-getta, e solo a quel punto l'agente viene interpellato di nuovo con lo stato reale della pagina risultante — mai un lotto di più azioni decise in anticipo su uno stato che nel frattempo è già cambiato. È lo stesso principio adottato dagli strumenti reali di automazione browser guidata da agenti (il server MCP ufficiale di Microsoft per Playwright, Stagehand di Browserbase): un'azione alla volta, con la pagina ri-osservata per davvero prima di ogni decisione successiva.
 
@@ -236,8 +236,7 @@ ClipDev/
     │   ├── pageInspection.js     Individua gli elementi con cui interagire sulla pagina
     │   ├── videoTranscode.js     Converte il video: taglio del tempo morto, callout testuali
     │   └── recordingConfig.js    Dimensioni video (Full HD 16:9) condivise
-    ├── projectDetection.js    Interpreta i parametri, indovina l'URL del dev server e la rotta
-    │                            di un'entità citata nei requisiti
+    ├── projectDetection.js    Interpreta i parametri e indovina l'URL del dev server
     └── saveOutputTool.js      Salva su disco scaletta e post; definisce lo schema
                                  dell'outline (incluse le callout) condiviso con l'Analyst
 ```

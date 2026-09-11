@@ -251,13 +251,7 @@ export async function runClipDevPipeline({
       { messages: [{ role: "user", content: projectSummary }] },
       { timeout: LLM_CALL_TIMEOUT_MS }
     ),
-    // projectSummary viene passato anche qui (non solo all'Analyst Agent):
-    // permette a inspectClipDevPage di segnalare (solo in console, senza
-    // cambiare da dove parte la registrazione, che resta sempre la home
-    // page) se una rotta dedicata a un'entità citata nei requisiti (es.
-    // "/prodotti") è raggiungibile — vedi guessEntityRoutePaths in
-    // tools/projectDetection.js.
-    inspectClipDevPage({ url, headless, projectSummary }),
+    inspectClipDevPage({ url, headless }),
   ]);
 
   // Se l'esame della pagina è andato a buon fine ma qualcos'altro più

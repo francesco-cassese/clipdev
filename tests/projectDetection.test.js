@@ -9,12 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  parseFlags,
-  guessDevServerUrl,
-  guessPortFromScripts,
-  guessEntityRoutePaths,
-} from "../tools/projectDetection.js";
+import { parseFlags, guessDevServerUrl, guessPortFromScripts } from "../tools/projectDetection.js";
 
 test("parseFlags legge coppie --nome=valore", () => {
   const flags = parseFlags(["--name=Il Mio Progetto", "--url=http://localhost:5173"]);
@@ -79,37 +74,4 @@ test("guessDevServerUrl preferisce la porta esplicita dello script al default de
 test("guessDevServerUrl usa la porta esplicita anche senza un framework noto tra le dipendenze", () => {
   const pkg = { dependencies: { lodash: "^4.0.0" }, scripts: { dev: "node server.js --port=9090" } };
   assert.equal(guessDevServerUrl(pkg), "http://localhost:9090");
-});
-
-test("guessEntityRoutePaths restituisce un elenco vuoto senza testo", () => {
-  assert.deepEqual(guessEntityRoutePaths(null), []);
-  assert.deepEqual(guessEntityRoutePaths(""), []);
-});
-
-test("guessEntityRoutePaths restituisce un elenco vuoto se nessuna parola chiave nota compare nel testo", () => {
-  assert.deepEqual(guessEntityRoutePaths("Un semplice tool CLI per convertire file audio."), []);
-});
-
-test("guessEntityRoutePaths riconosce un catalogo/prodotti in italiano e in inglese", () => {
-  assert.deepEqual(guessEntityRoutePaths("Un e-commerce con catalogo prodotti e carrello."), [
-    "/prodotti",
-    "/products",
-    "/catalogo",
-    "/catalog",
-    "/shop",
-    "/store",
-  ]);
-  assert.deepEqual(guessEntityRoutePaths("An online store with a product catalog."), [
-    "/prodotti",
-    "/products",
-    "/catalogo",
-    "/catalog",
-    "/shop",
-    "/store",
-  ]);
-});
-
-test("guessEntityRoutePaths unisce le rotte di più entità citate, senza duplicati", () => {
-  const paths = guessEntityRoutePaths("Un blog con articoli e una pagina contatti.");
-  assert.deepEqual(paths, ["/blog", "/articoli", "/articles", "/posts", "/contatti", "/contact", "/contacts"]);
 });

@@ -36,7 +36,6 @@ import {
   waitForImagesToLoad,
 } from "./pageInspection.js";
 import { CalloutSchema, transcodeToMp4 } from "./videoTranscode.js";
-import { guessEntityRoutePaths } from "../projectDetection.js";
 
 // Breve pausa dopo l'ultima interazione eseguita, prima di terminare la
 // registrazione: garantisce che il risultato di un'azione (ad esempio un
@@ -338,37 +337,6 @@ export async function safeCloseBrowser(browser) {
 // strumenti di sviluppo impiegano diversi secondi a preparare la pagina la
 // primissima volta che viene richiesta, un tempo che in questo modo non
 // ricade sulla parte effettivamente registrata.
-// Prova, in ordine, ciascuna rotta candidata (vedi guessEntityRoutePaths in
-// tools/projectDetection.js) navigando la pagina indicata: se una risponde
-// con successo e mostra almeno un elemento interattivo, la restituisce.
-// Solo diagnostica (vedi il commento in inspectClipDevPage più sotto): non
-// cambia mai da dove parte la registrazione, che resta sempre la home page.
-// Restituisce `null` se nessuna candidata è raggiungibile o utile (es. un
-// router lato client che ricade sempre sulla stessa schermata per qualunque
-// percorso sconosciuto).
-async function tryResolveEntityRoute(page, baseUrl, candidatePaths) {
-  for (const candidatePath of candidatePaths) {
-    let candidateUrl;
-    try {
-      candidateUrl = new URL(candidatePath, baseUrl).toString();
-    } catch {
-      continue;
-    }
-    try {
-      const response = await page.goto(candidateUrl, { waitUntil: "load", timeout: 10_000 });
-      if (!response || !response.ok()) continue;
-      await waitForDomStability(page, { timeoutMs: 5_000 });
-      const elements = await extractInteractiveElements(page);
-      if (elements.length > 0) {
-        return { url: candidateUrl, elements };
-      }
-    } catch (error) {
-      console.error(`Rotta candidata "${candidatePath}" non raggiungibile (ignorata): ${error.message}`);
-    }
-  }
-  return null;
-}
-
 export async function inspectClipDevPage(rawInput) {
   const url = TargetUrlSchema.parse(rawInput.url);
   const headless = rawInput.headless ?? true;
@@ -411,42 +379,6 @@ export async function inspectClipDevPage(rawInput) {
     // ancora visibile: senza questa informazione, la scelta di scorrere la
     // pagina non avrebbe alcun dato reale su cui basarsi.
     const overflow = await getPageOverflowInfo(page);
-
-    // Verifica (solo diagnostica, in console) se la descrizione del
-    // progetto cita un'entità con una rotta tipica (es. un catalogo/dei
-    // prodotti — vedi guessEntityRoutePaths in tools/projectDetection.js):
-    // NON cambia né l'URL né gli elementi restituiti da questa funzione. La
-    // registrazione deve sempre iniziare e essere pianificata a partire
-    // dalla HOME page (il primo istante del video è la baseline che il
-    // pubblico deve riconoscere, vedi il commento di runClipDevPipeline):
-    // saltare direttamente alla rotta candidata, come faceva una versione
-    // precedente di questa funzione, produceva un disallineamento reale —
-    // gli elementi pianificati dal Director Agent non corrispondevano più
-    // alla pagina davvero mostrata all'inizio della registrazione — non
-    // solo un dettaglio di regia. Se la pagina è raggiungibile solo dietro
-    // un link non ancora visibile sulla home (es. un menu collassato),
-    // resta comunque una sezione dell'outline che il Director Agent può
-    // scegliere di non riuscire a dimostrare in questa esecuzione: un
-    // limite noto, non risolto scavalcando la home.
-    const candidatePaths = guessEntityRoutePaths(rawInput.projectSummary);
-    if (candidatePaths.length > 0) {
-      // Verifica su un contesto separato, non su `context`/`page` sopra:
-      // quella pagina resta la home, invariata, ed è quella i cui elementi
-      // sono già stati estratti sopra.
-      const verificationContext = await browser.newContext(DESKTOP_CONTEXT_OPTIONS);
-      try {
-        const verificationPage = await verificationContext.newPage();
-        const resolved = await tryResolveEntityRoute(verificationPage, url, candidatePaths);
-        if (resolved) {
-          console.log(
-            `Nota: la descrizione del progetto cita un'entità con una rotta dedicata raggiungibile (${resolved.url}); ` +
-              "la registrazione parte comunque dalla home page."
-          );
-        }
-      } finally {
-        await verificationContext.close();
-      }
-    }
 
     // A differenza di una versione precedente di questa funzione, context e
     // page NON vengono chiusi qui: restano a disposizione di chi chiama
