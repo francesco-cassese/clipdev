@@ -14,14 +14,7 @@ import { chromium } from "playwright";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
-import {
-  CanvasFormatSchema,
-  DEFAULT_CANVAS_FORMAT,
-  MOBILE_DEVICE,
-  MOBILE_RECORD_VIDEO_SIZE,
-  VIDEO_WIDTH,
-  VIDEO_HEIGHT,
-} from "./recordingConfig.js";
+import { VIDEO_WIDTH, VIDEO_HEIGHT } from "./recordingConfig.js";
 import {
   CURSOR_INIT_SCRIPT,
   dragSliderHumanLike,
@@ -43,6 +36,7 @@ import {
   waitForImagesToLoad,
 } from "./pageInspection.js";
 import { CalloutSchema, transcodeToMp4 } from "./videoTranscode.js";
+import { guessEntityRoutePaths } from "../projectDetection.js";
 
 // Breve pausa dopo l'ultima interazione eseguita, prima di terminare la
 // registrazione: garantisce che il risultato di un'azione (ad esempio un
@@ -303,19 +297,13 @@ async function runAction(page, step, cursorState) {
   }
 }
 
-// Opzioni di contesto (viewport, pixel ratio, user agent, touch) da passare
-// a browser.newContext(), condivise da inspectClipDevPage e
-// startClipDevRecording sotto perché entrambe devono aprire la pagina nello
-// STESSO ambiente — altrimenti l'elenco di elementi individuato in fase di
-// analisi (layout desktop) non corrisponderebbe più a quello realmente
-// disponibile in fase di registrazione (layout mobile), o viceversa.
-// `mobileRecording` true usa il preset di dispositivo reale (vedi
-// MOBILE_DEVICE in tools/browser/recordingConfig.js), per mostrare il vero
-// layout responsive invece del desktop poi semplicemente ritagliato (vedi
-// CANVAS_FORMATS, che da solo non cambia il layout mostrato).
-function buildBrowserContextOptions(mobileRecording) {
-  return mobileRecording ? { ...MOBILE_DEVICE } : { viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT } };
-}
+// Opzioni di contesto (viewport) da passare a browser.newContext(),
+// condivise da inspectClipDevPage e startClipDevRecording sotto perché
+// entrambe devono aprire la pagina nello STESSO ambiente — altrimenti
+// l'elenco di elementi individuato in fase di analisi non corrisponderebbe
+// più a quello realmente disponibile in fase di registrazione. Solo
+// desktop per il momento (vedi "Prossimi sviluppi" nel README).
+const DESKTOP_CONTEXT_OPTIONS = { viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT } };
 
 // Chiude il browser in modo sicuro: se la chiusura stessa dovesse fallire
 // (ad esempio perché il browser si è già arrestato per conto proprio), il
@@ -350,14 +338,44 @@ export async function safeCloseBrowser(browser) {
 // strumenti di sviluppo impiegano diversi secondi a preparare la pagina la
 // primissima volta che viene richiesta, un tempo che in questo modo non
 // ricade sulla parte effettivamente registrata.
+// Prova, in ordine, ciascuna rotta candidata (vedi guessEntityRoutePaths in
+// tools/projectDetection.js) navigando la pagina indicata: se una risponde
+// con successo e mostra almeno un elemento interattivo, la restituisce.
+// Solo diagnostica (vedi il commento in inspectClipDevPage più sotto): non
+// cambia mai da dove parte la registrazione, che resta sempre la home page.
+// Restituisce `null` se nessuna candidata è raggiungibile o utile (es. un
+// router lato client che ricade sempre sulla stessa schermata per qualunque
+// percorso sconosciuto).
+async function tryResolveEntityRoute(page, baseUrl, candidatePaths) {
+  for (const candidatePath of candidatePaths) {
+    let candidateUrl;
+    try {
+      candidateUrl = new URL(candidatePath, baseUrl).toString();
+    } catch {
+      continue;
+    }
+    try {
+      const response = await page.goto(candidateUrl, { waitUntil: "load", timeout: 10_000 });
+      if (!response || !response.ok()) continue;
+      await waitForDomStability(page, { timeoutMs: 5_000 });
+      const elements = await extractInteractiveElements(page);
+      if (elements.length > 0) {
+        return { url: candidateUrl, elements };
+      }
+    } catch (error) {
+      console.error(`Rotta candidata "${candidatePath}" non raggiungibile (ignorata): ${error.message}`);
+    }
+  }
+  return null;
+}
+
 export async function inspectClipDevPage(rawInput) {
   const url = TargetUrlSchema.parse(rawInput.url);
   const headless = rawInput.headless ?? true;
-  const mobileRecording = rawInput.mobileRecording ?? false;
 
   const browser = await chromium.launch({ headless });
   try {
-    const context = await browser.newContext(buildBrowserContextOptions(mobileRecording));
+    const context = await browser.newContext(DESKTOP_CONTEXT_OPTIONS);
     const page = await context.newPage();
 
     // Il tracciamento delle richieste di rete deve partire PRIMA della
@@ -388,23 +406,62 @@ export async function inspectClipDevPage(rawInput) {
     // è il materiale su cui l'agente baserà la scelta delle interazioni da
     // mostrare (vedi tools/browser/pageInspection.js).
     const elements = await extractInteractiveElements(page);
+
     // Allo stesso modo, viene misurato quanto contenuto della pagina non è
     // ancora visibile: senza questa informazione, la scelta di scorrere la
     // pagina non avrebbe alcun dato reale su cui basarsi.
     const overflow = await getPageOverflowInfo(page);
 
-    // Solo la sessione di analisi viene chiusa qui: il browser resta
-    // aperto e verrà riutilizzato per la registrazione vera e propria. Un
-    // eventuale problema nella chiusura di questa sessione viene solo
-    // registrato, senza far fallire un'analisi che è già andata a buon
-    // fine.
-    try {
-      await context.close();
-    } catch (closeError) {
-      console.error(`Chiusura del contesto di ispezione fallita (ignorata): ${closeError.message}`);
+    // Verifica (solo diagnostica, in console) se la descrizione del
+    // progetto cita un'entità con una rotta tipica (es. un catalogo/dei
+    // prodotti — vedi guessEntityRoutePaths in tools/projectDetection.js):
+    // NON cambia né l'URL né gli elementi restituiti da questa funzione. La
+    // registrazione deve sempre iniziare e essere pianificata a partire
+    // dalla HOME page (il primo istante del video è la baseline che il
+    // pubblico deve riconoscere, vedi il commento di runClipDevPipeline):
+    // saltare direttamente alla rotta candidata, come faceva una versione
+    // precedente di questa funzione, produceva un disallineamento reale —
+    // gli elementi pianificati dal Director Agent non corrispondevano più
+    // alla pagina davvero mostrata all'inizio della registrazione — non
+    // solo un dettaglio di regia. Se la pagina è raggiungibile solo dietro
+    // un link non ancora visibile sulla home (es. un menu collassato),
+    // resta comunque una sezione dell'outline che il Director Agent può
+    // scegliere di non riuscire a dimostrare in questa esecuzione: un
+    // limite noto, non risolto scavalcando la home.
+    const candidatePaths = guessEntityRoutePaths(rawInput.projectSummary);
+    if (candidatePaths.length > 0) {
+      // Verifica su un contesto separato, non su `context`/`page` sopra:
+      // quella pagina resta la home, invariata, ed è quella i cui elementi
+      // sono già stati estratti sopra.
+      const verificationContext = await browser.newContext(DESKTOP_CONTEXT_OPTIONS);
+      try {
+        const verificationPage = await verificationContext.newPage();
+        const resolved = await tryResolveEntityRoute(verificationPage, url, candidatePaths);
+        if (resolved) {
+          console.log(
+            `Nota: la descrizione del progetto cita un'entità con una rotta dedicata raggiungibile (${resolved.url}); ` +
+              "la registrazione parte comunque dalla home page."
+          );
+        }
+      } finally {
+        await verificationContext.close();
+      }
     }
 
-    return { browser, url, headless, mobileRecording, elements, overflow };
+    // A differenza di una versione precedente di questa funzione, context e
+    // page NON vengono chiusi qui: restano a disposizione di chi chiama
+    // (vedi la fase di esplorazione in pipeline/clipDevPipeline.js), che li
+    // userà per risolvere l'intera sequenza di interazioni PRIMA di avviare
+    // la registrazione vera — eseguendo per davvero ogni turno su questa
+    // stessa pagina, non su una già in fase di registrazione. Playwright
+    // richiede comunque un context SEPARATO con `recordVideo` attivo fin
+    // dall'apertura per la registrazione vera (l'opzione non è attivabile a
+    // metà su un context già aperto, né la registrazione può iniziare dopo
+    // la navigazione: vedi startClipDevRecording più sotto), quindi questo
+    // context di sola esplorazione andrà comunque chiuso — sarà compito di
+    // chi chiama farlo (o tramite abortClipDevRecording, se qualcosa
+    // fallisce prima).
+    return { browser, context, page, url, headless, elements, overflow };
   } catch (error) {
     await safeCloseBrowser(browser);
     throw error;
@@ -420,23 +477,17 @@ export async function inspectClipDevPage(rawInput) {
 // sotto) perché chi coordina il processo deve poter esaminare la pagina e
 // i suoi elementi prima di decidere cosa fare — decisione che ora avviene
 // prima di questa fase, non più a registrazione già iniziata.
-export async function startClipDevRecording({ browser, url, mobileRecording = false }) {
+export async function startClipDevRecording({ browser, url }) {
   await mkdir(RAW_VIDEO_DIR, { recursive: true });
 
   try {
     // Viene creata una nuova sessione del browser con le dimensioni
-    // corrette e la registrazione video attivata. La dimensione del video
-    // registrato segue lo stesso ramo mobile/desktop del contesto: per il
-    // dispositivo mobile viene usata la sua risoluzione fisica reale (vedi
-    // MOBILE_RECORD_VIDEO_SIZE in tools/browser/recordingConfig.js), non
-    // quella desktop, altrimenti il fotogramma verrebbe rimpicciolito
-    // (mai ingrandito: vedi il commento su MOBILE_RECORD_VIDEO_SIZE) fino a
-    // un formato diverso da quello nativo del dispositivo.
+    // corrette e la registrazione video attivata.
     const context = await browser.newContext({
-      ...buildBrowserContextOptions(mobileRecording),
+      ...DESKTOP_CONTEXT_OPTIONS,
       recordVideo: {
         dir: RAW_VIDEO_DIR,
-        size: mobileRecording ? MOBILE_RECORD_VIDEO_SIZE : { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+        size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
       },
     });
 
@@ -556,7 +607,27 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
     // cui sono state fornite: è questa la sequenza che finisce ripresa nel
     // video.
     for (const step of parsedActions) {
-      await runAction(page, step, cursorState);
+      try {
+        await runAction(page, step, cursorState);
+      } catch (error) {
+        // Un singolo passo che fallisce (tipicamente: il selettore non
+        // corrisponde più a nulla sulla pagina) non deve far fallire
+        // l'intera registrazione: il video resta comunque valido con le
+        // interazioni riuscite fino a questo punto — un risultato
+        // accettabile, coerente con lo stesso principio di degradazione
+        // controllata già applicato altrove in questo progetto (vedi ad
+        // esempio il commento su planNextDirectorAction in
+        // ai/agents/directorAgent.js). Diventato concretamente possibile da
+        // quando il piano viene risolto in anticipo su una pagina di
+        // esplorazione separata (vedi FASE 1.5 in
+        // pipeline/clipDevPipeline.js) ed eseguito qui su una pagina fresca:
+        // per un sito con contenuto realmente statico le due coincidono
+        // sempre, ma senza questa rete di sicurezza un singolo elemento
+        // scomparso o cambiato tra le due pagine butterebbe via l'intero
+        // girato invece di limitarsi a saltare quel passo.
+        console.error(`Azione saltata (selettore non più valido su questa pagina): ${JSON.stringify(step)} — ${error.message}`);
+        continue;
+      }
       // Registrato DOPO l'esecuzione, non prima: per un'azione che avvia
       // una navigazione (es. un click su un link di menu), il "prima"
       // cadrebbe nell'istante in cui il cursore comincia appena a
@@ -617,13 +688,92 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
   return { cursorState, ranAnyAction: true, cutRanges: cutRange ? [cutRange] : [], actionTimings };
 }
 
+// --- Card di branding finale ---------------------------------------------------
+//
+// A differenza delle callout testuali (sovrimpresse in post-produzione da
+// ffmpeg, vedi tools/browser/videoTranscode.js), questa card viene
+// renderizzata DAL VERO BROWSER e catturata come parte della stessa
+// registrazione video — lo stesso principio già usato per il cursore
+// visibile e il ripple al click (iniettati nella pagina, vedi
+// CURSOR_INIT_SCRIPT in tools/browser/humanInteraction.js), non un
+// meccanismo nuovo per questo progetto. Un font renderizzato dal motore del
+// browser e un'animazione CSS risultano più nitidi e curati di un testo
+// disegnato da ffmpeg su un fotogramma congelato, e non richiedono cercare
+// un font di sistema compatibile con drawtext (qui non serve: il browser ha
+// sempre un font disponibile). `page.setContent()` è un'API Playwright
+// stabile fin dalla v1.8, non sperimentale né deprecata.
+//
+// Un video breve per il feed di LinkedIn non deve chiudersi con un vero e
+// proprio "end screen" (elementi cliccabili, invito a iscriversi): quel
+// pattern è pensato per contenuti di minuti su YouTube, non per 15-30
+// secondi guardati scorrendo il feed. Questa card si limita quindi al nome
+// del progetto, senza alcuna call-to-action — quella vive già nel testo del
+// post/primo commento scritto dal Copywriter Agent, mai nel video.
+const BRANDING_CARD_HOLD_MS = 1_800;
+
+// Sfugge i caratteri che romperebbero il markup se inseriti direttamente in
+// un attributo/testo HTML: il nome del progetto arriva da chi usa ClipDev
+// (riga di comando o libreria), non da un testo scritto a mano da noi.
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+
+function buildBrandingCardHtml(projectName) {
+  const safeName = escapeHtml(projectName);
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #111318; overflow: hidden; }
+  /* Il cursore e il ripple (vedi CURSOR_INIT_SCRIPT) sopravvivono a
+     setContent() perché iniettati con addInitScript(), che si riesegue a
+     ogni navigazione: su questa card non hanno senso, vengono nascosti. */
+  #__clipdev_cursor__, .__clipdev_ripple { display: none !important; }
+  .card {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .name {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: #ffffff; font-size: 72px; font-weight: 700; letter-spacing: 0.01em;
+    text-align: center; padding: 0 80px;
+    opacity: 0; transform: scale(0.92);
+    animation: __clipdev_card_in 500ms ease-out forwards;
+  }
+  @keyframes __clipdev_card_in {
+    to { opacity: 1; transform: scale(1); }
+  }
+</style>
+</head>
+<body><div class="card"><div class="name">${safeName}</div></div></body>
+</html>`;
+}
+
+// Sostituisce la pagina reale con la card di branding e la tiene a schermo
+// per un istante — catturata come normali fotogrammi della registrazione
+// già in corso, non aggiunta dopo. Un eventuale problema qui (ad esempio un
+// nome progetto che per qualche motivo manda in errore setContent) non deve
+// far fallire l'intera registrazione: il video resta comunque valido senza
+// la card, un risultato accettabile, coerente con lo stesso principio di
+// degradazione controllata già applicato altrove in questo progetto.
+export async function showBrandingCard(page, projectName) {
+  try {
+    await page.setContent(buildBrandingCardHtml(projectName));
+    await page.waitForTimeout(BRANDING_CARD_HOLD_MS);
+  } catch (error) {
+    console.error(`Card di branding finale saltata (non bloccante): ${error.message}`);
+  }
+}
+
 // Completa una registrazione già avvenuta (interazioni comprese):
-// attende una breve pausa finale, garantisce una durata minima del video,
-// chiude la sessione e converte il file registrato nel formato definitivo.
-// È separata dall'esecuzione delle interazioni perché quest'ultima può
-// essere stata richiamata più volte prima di arrivare a questo punto:
-// questa funzione ha solo bisogno di sapere se è stata eseguita almeno
-// un'interazione in totale, per decidere se applicare la pausa finale.
+// mostra la card di branding finale (o, se non richiesta, una breve pausa
+// equivalente), garantisce una durata minima del video, chiude la sessione
+// e converte il file registrato nel formato definitivo. È separata
+// dall'esecuzione delle interazioni perché quest'ultima può essere stata
+// richiamata più volte prima di arrivare a questo punto: questa funzione ha
+// solo bisogno di sapere se è stata eseguita almeno un'interazione in
+// totale, per decidere se applicare la pausa di ripiego.
 export async function finalizeClipDevRecording({
   browser,
   context,
@@ -646,9 +796,12 @@ export async function finalizeClipDevRecording({
   // Callout testuali da sovrimprimere in fase di montaggio, lette
   // dall'outline (vedi tools/browser/videoTranscode.js).
   callouts = [],
-  // "widescreen" (default) o "square": vedi CANVAS_FORMATS in
-  // tools/browser/recordingConfig.js.
-  canvasFormat = DEFAULT_CANVAS_FORMAT,
+  // Testo della card di branding finale (tipicamente il nome del
+  // progetto): se fornito, sostituisce la breve pausa fissa con la card
+  // renderizzata dal browser (vedi showBrandingCard sopra) — stesso scopo
+  // (lasciare respirare l'ultimo risultato prima di terminare), ma con una
+  // chiusura riconoscibile invece di un semplice fermo immagine.
+  brandingText,
 }) {
   try {
     // I parametri ricevuti dall'esterno vengono controllati anche qui,
@@ -656,7 +809,6 @@ export async function finalizeClipDevRecording({
     const parsedOutputPath = OutputPathSchema.parse(outputPath);
     const parsedMinDurationMs = z.number().int().positive().max(120_000).parse(minDurationMs);
     const parsedCallouts = z.array(CalloutSchema).parse(callouts);
-    const parsedCanvasFormat = CanvasFormatSchema.parse(canvasFormat);
 
     // Il percorso del file viene ricalcolato all'interno della cartella
     // prevista e si verifica che il risultato resti effettivamente
@@ -673,11 +825,24 @@ export async function finalizeClipDevRecording({
       // Pausa fissa dopo l'ultima interazione, indipendente dalla durata
       // minima calcolata più sotto: senza questa pausa, il risultato di
       // un'interazione (un testo digitato, un contenuto appena comparso)
-      // sarebbe visibile solo per una frazione di secondo prima della fine
-      // del video. Viene applicata solo se sono state eseguite interazioni:
-      // senza interazioni non c'è alcun nuovo risultato da mostrare.
+      // sarebbe visibile solo per una frazione di secondo prima di passare
+      // alla card di branding (o di terminare, se non richiesta) — le
+      // pratiche di settore per demo automatiche sono chiare su questo
+      // punto: il risultato va lasciato "respirare" alcuni secondi PRIMA di
+      // proseguire (mai tagliato subito), il payoff conta più del click che
+      // lo ha prodotto. Viene applicata solo se sono state eseguite
+      // interazioni: senza interazioni non c'è alcun nuovo risultato da
+      // mostrare, quindi nulla su cui indugiare.
       if (hadActions) {
         await page.waitForTimeout(ACTION_SETTLE_MS);
+      }
+
+      // La card di branding finale (vedi showBrandingCard sopra) arriva
+      // SEMPRE dopo questa pausa, mai al suo posto: il video deve mostrare
+      // per intero il risultato vero prima di chiudersi, non saltare
+      // direttamente dall'azione alla chiusura.
+      if (brandingText) {
+        await showBrandingCard(page, brandingText);
       }
 
       // Se, sommando caricamento, interazioni ed eventuale pausa finale,
@@ -717,11 +882,10 @@ export async function finalizeClipDevRecording({
 
     // Converte il file video nel formato finale, nel percorso richiesto,
     // rimuovendo per intero gli intervalli di tempo morto individuati e
-    // applicando le callout/il formato canvas richiesti.
+    // applicando le callout richieste.
     await transcodeToMp4(rawWebmPath, resolvedOutputPath, {
       cutRanges: allCutRanges,
       callouts: parsedCallouts,
-      canvasFormat: parsedCanvasFormat,
     });
 
     // Il file intermedio non serve più una volta ottenuto il file finale:

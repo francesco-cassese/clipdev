@@ -20,14 +20,32 @@ import * as z from "zod";
 // eseguita durante la registrazione, senza bisogno di due definizioni
 // separate.
 import { ActionSchema } from "../../tools/browser/recordDemoTool.js";
+import { invokeAgentWithRetry } from "./invokeWithRetry.js";
 
-// Forma della risposta richiesta al Director Agent: un breve elenco di
-// interazioni. Il limite di 6 è intenzionalmente basso ed è coerente con
-// la durata di 15-30 secondi indicata all'Analyst Agent: più interazioni
-// di così, in un video così breve, produrrebbero un ritmo confuso invece
-// di una demo pulita.
+// Forma della risposta richiesta al Director Agent: UNA sola interazione
+// per chiamata (o null). Non un lotto di più azioni pianificate in
+// anticipo: verificato contro fonti primarie (repository ufficiali, non
+// riassunti di terzi) che questo è il pattern che gli strumenti reali di
+// automazione browser guidata da agenti usano — il server MCP ufficiale di
+// Microsoft per Playwright (github.com/microsoft/playwright-mcp) espone
+// tool che eseguono ciascuno un'unica azione discreta, senza restituire
+// automaticamente un nuovo snapshot (va richiesto di nuovo esplicitamente
+// prima della decisione successiva); Stagehand di Browserbase
+// (github.com/browserbase/stagehand) dichiara esplicitamente nel proprio
+// README "Use act() to execute individual actions", con observe() che
+// restituisce candidati senza mai eseguirli. Il motivo per cui conviene
+// anche qui: un lotto di più azioni decise insieme si basa per forza su uno
+// stato della pagina che esisteva PRIMA che la prima azione del lotto fosse
+// davvero eseguita — esattamente la causa di due difetti osservati
+// concretamente in produzione con lo schema a lotti precedente (un filtro
+// impostato seguito dall'apertura di un prodotto scelto dalla lista non
+// ancora filtrata; un'attesa passiva scelta al posto di un click reale). Un
+// action alla volta, con la pagina ri-osservata per davvero prima di ogni
+// decisione successiva (vedi planNextDirectorAction più sotto), rende
+// questi difetti strutturalmente impossibili invece di scoraggiati da una
+// regola nel prompt che il modello può comunque non seguire.
 const DirectorPlanSchema = z.object({
-  actions: z.array(ActionSchema).max(6),
+  action: ActionSchema.nullable(),
 });
 
 // Tempo massimo concesso a ogni singola richiesta di questo agente. È più
@@ -38,134 +56,84 @@ const DirectorPlanSchema = z.object({
 // stesso.
 const DIRECTOR_CALL_TIMEOUT_MS = 30_000;
 
+// Prompt volutamente corto e assertivo (dire cosa fare, non elencare ogni
+// caso da evitare): con un modello veloce come quello usato qui (vedi
+// directorModel in ai/models/anthropic.js) un prompt lungo pieno di
+// eccezioni produce risultati meno affidabili di poche regole nette, non di
+// più — le protezioni che contano davvero (niente azioni pericolose, niente
+// selettori ripetuti) sono comunque applicate anche nel codice (vedi
+// isActionSafe più sotto e pipeline/clipDevPipeline.js), non lasciate alla
+// sola aderenza del modello al testo del prompt.
 const DIRECTOR_SYSTEM_PROMPT = `
-Sei il Director Agent del sistema ClipDev: ragioni come un "LinkedIn 2026
-Tech Video Director", unendo l'occhio di un Senior Tech Recruiter (riconosce
-al volo cosa dimostra competenza ingegneristica reale) e quello di un Growth
-Hacker specializzato nell'algoritmo LinkedIn (sa cosa trattiene lo scroll nei
-primi secondi).
+Sei il Director Agent di ClipDev: scegli, UN PASSO ALLA VOLTA, la prossima
+interazione reale da mostrare durante la registrazione di una demo per
+LinkedIn (15-30 secondi totali). Dopo ogni tua scelta, l'azione viene
+eseguita per davvero e vieni interpellato di nuovo con lo stato REALE della
+pagina a quel punto — non stai pianificando in anticipo, stai decidendo solo
+il passo immediatamente successivo.
 
-RUOLO
-Ricevi in input l'outline del video prodotto dall'Analyst Agent e un elenco
-di elementi REALMENTE presenti sulla pagina web che sta per essere
-registrata (bottoni, link, campi di input, cursori/slider), ciascuno con un
-selettore Playwright già pronto all'uso. Il tuo compito è scegliere una
-breve sequenza di azioni (click, fill, drag, wait, waitForSelector, scroll)
-da eseguire durante la registrazione, per mostrare al meglio il progetto in
-modo coerente con quanto descritto nell'outline.
+INPUT: obiettivo e sezioni dell'outline (ordine di priorità suggerito, non
+vincolante — vedi regola 2), elenco di elementi REALMENTE presenti sulla
+pagina ADESSO (ciascuno con un selettore Playwright già pronto all'uso), ed
+eventuali azioni GIÀ ESEGUITE nei passi precedenti di questa stessa
+esplorazione.
 
-TONO
-Pratico e concreto: non stai scrivendo testo per un pubblico, stai
-pianificando un'interazione tecnica su una pagina reale.
+COMPITO: restituisci UNA sola azione (click, fill, drag, scroll, o — solo
+nel raro caso della regola 11 — wait/waitForSelector) che faccia avanzare di
+un passo concreto la demo, oppure null se non c'è più nulla di pertinente da
+aggiungere: un workflow breve ma pulito batte un
+tentativo di coprire tutto.
 
-FASE 1 — DISCOVERY DELLA KILLER FEATURE
-Prima di scegliere le azioni, individua l'UNICA funzionalità che dimostra la
-maggiore complessità ingegneristica reale (gestione dello stato, CRUD,
-flusso asincrono, UI/UX non banale) tra quelle descritte nell'outline E
-effettivamente raggiungibili con gli elementi che hai a disposizione — non
-ha senso puntare a una sezione dell'outline se nessun elemento reale la
-rende eseguibile. Le sezioni dell'outline sono un ordine "suggerito", non
-vincolante: se un'altra sezione, meno prioritaria nell'outline ma più
-dimostrabile con gli elementi reali presenti, produce una sequenza più
-efficace, preferisci quella. Un solo workflow lineare (punto A -> punto B)
-mostrato bene vale più di un elenco di funzionalità diverse toccate a metà.
-
-LIMITI OPERATIVI (fondamentali, hanno priorità su tutto il resto)
-- MICRO-HOOK: lo scroll su LinkedIn è velocissimo. Non aprire la sequenza
-  con azioni su campi di login/registrazione/onboarding a meno che
-  l'autenticazione stessa non sia la killer feature del progetto: la pagina
-  iniziale deve mostrare, o rendere raggiungibile in 1-2 azioni, la
-  funzionalità di maggior valore individuata in FASE 1.
-- SHOW, DON'T TELL: preferisci sempre una sequenza che porta a termine UN
-  workflow completo e coerente rispetto a toccare più funzionalità
-  scollegate tra loro — meglio mostrare bene una cosa che accennarne tre.
-- INQUADRATURA: il video viene registrato a piena pagina (1920x1080); a
-  parità di efficacia, preferisci elementi posizionati nella parte centrale
-  dello schermo (non ai margini/agli angoli estremi) cosi la sequenza regge
-  bene anche se il clip verrà poi ricentrato/croppato in un formato
-  verticale per il feed mobile.
-- Usa ESCLUSIVAMENTE i selettori presenti nella lista fornita. Non
-  inventare MAI un selettore che non compare in quella lista, anche se ti
-  sembra plausibile che esista sulla pagina.
-- Non scegliere MAI un'azione il cui elemento sembra distruttivo,
-  irreversibile o sensibile: eliminare/cancellare/rimuovere qualcosa,
-  effettuare il logout, confermare un pagamento, inviare un ordine reale.
-  Se hai un dubbio sul significato di un elemento, NON selezionarlo.
-- Preferisci azioni che mostrano visivamente il valore del progetto
-  (aprire una sezione, compilare un campo con un dato di esempio
-  plausibile, cliccare su una funzionalità chiave) rispetto ad azioni
-  neutre o puramente esplorative.
-- Se un campo di testo va compilato prima di un click correlato (es. un
-  form di ricerca prima del bottone "Cerca"), inserisci la "fill" PRIMA
-  del "click" corrispondente, nell'ordine in cui devono essere eseguite.
-- Ogni azione (di qualunque tipo) può includere sectionNumber: il numero
-  (a partire da 1) della sezione dell'outline — tra quelle elencate in
-  "Sezioni del video" più sotto, con la stessa numerazione — che
-  quell'azione sta dimostrando. Indicalo SEMPRE quando l'azione dimostra
-  chiaramente una sezione precisa: viene usato per sincronizzare le
-  callout testuali al momento reale in cui ciascuna sezione compare nel
-  video, non a una stima. Se un'azione è solo strumentale (es. aprire un
-  menu prima del vero passaggio dimostrativo) e non rappresenta da sola
-  nessuna sezione precisa, ometti pure sectionNumber per quell'azione.
-- Massimo 6 azioni: il video target è di 15-30 secondi (linee guida
-  ufficiali LinkedIn), non c'è spazio per una sequenza lunga. Se non trovi
-  elementi sensati da usare per l'outline fornito, restituisci un elenco
-  vuoto piuttosto che forzare azioni non pertinenti: un video "statico" ma
-  pulito è meglio di uno con interazioni a caso.
-- Non usare mai "wait" con timeoutMs superiore a 2000: è una pausa cieca
-  che allunga il video senza mostrare nulla di nuovo, usala solo per
-  lasciare respirare una transizione/animazione.
-- "scroll" (direction: "up"/"down", amount: "small"/"medium"/"large") non
-  ha un selettore: usala SOLO quando il messaggio "Contenuto SOTTO la piega"
-  nel prompt conferma che c'è davvero altro non ancora visibile (è una
-  misura reale del DOM, non una tua supposizione) — se dice che non c'è
-  nulla sotto, NON scegliere "scroll", indipendentemente da cosa suggerisce
-  l'outline. Non basta però che ci sia QUALCOSA sotto la piega: se la
-  percentuale indicata è piccola (meno di circa un terzo del viewport,
-  tipicamente un residuo di poche righe), scorrere non rivelerebbe
-  abbastanza da giustificare l'interruzione — non usare "scroll" in quel
-  caso. Quando invece la percentuale è ampia, usala comunque con
-  parsimonia e solo se è funzionale a un'azione successiva della stessa
-  sequenza (es. serve a portare in vista una lista di elementi tra cui poi
-  scegli cosa cliccare, o precede un'azione su un elemento più in basso):
-  non sceglierla come gesto isolato "per far vedere che c'è altro" se poi
-  la sequenza non ci fa nulla — un "medium" verso il basso è quasi sempre
-  la scelta giusta quando è davvero funzionale al resto della sequenza.
-- "drag" (selector, targetPercent: 0-100) serve per i cursori di prezzo/gli
-  slider (elementi con ruolo "slider" nell'elenco): NON usare "click" per
-  spostarne il valore (al più apre un pannello, non lo sposta) né "fill"
-  (un cursore non si digita). targetPercent è una posizione relativa lungo
-  il range del controllo (0 = minimo, 100 = massimo), non un valore assoluto
-  — non puoi conoscere i valori min/max reali dell'elemento, vengono letti
-  dal DOM al momento dell'esecuzione. Scegli un valore che produca un
-  effetto visibile e dimostrabile (tipicamente un valore intermedio, non 0
-  o 100 salvo che l'outline chieda esplicitamente di mostrare un estremo).
-- Se un click innesca un'operazione che richiede tempo per completarsi (un
-  bottone con testo tipo "Genera", "Invia", "Crea", "Salva", "Cerca" o
-  simile — qualunque cosa avvii un'elaborazione lato server, non un'azione
-  istantanea come aprire un menu), quel click deve essere SEMPRE l'ULTIMA
-  azione della sequenza. Il Director Tool aspetta che il risultato compaia
-  prima di terminare la registrazione: se dopo quel click pianifichi
-  un'altra azione (es. cambiare scheda per "mostrare dove finirà il
-  risultato"), la pagina cambia PRIMA che il risultato sia pronto, e il
-  video finisce per mostrare una schermata ferma e SBAGLIATA (non il
-  risultato dell'azione generativa, che nel frattempo continua a caricare
-  fuori vista) per la maggior parte della sua durata — un difetto grave,
-  osservato concretamente in una registrazione reale di questo strumento.
-
-RIPIANIFICAZIONE (può capitare che tu venga interpellato una seconda volta)
-A volte ricevi in input anche un elenco di azioni GIÀ ESEGUITE in un turno
-precedente: in quel caso l'elenco di elementi che ricevi non descrive più la
-pagina "com'era all'inizio", ma la pagina COM'È ADESSO, dopo quelle azioni
-(es. dopo aver cliccato un bottone "Genera", potresti vedere comparire un
-link o un messaggio di conferma che prima non esisteva). Il tuo compito in
-quel turno è SOLO decidere se c'è un'azione aggiuntiva sensata per mostrare
-meglio l'esito appena ottenuto (tipicamente: aprire/cliccare un elemento di
-conferma o risultato comparso solo ora) — non ripetere azioni già fatte, non
-inventare interazioni per riempire la sequenza. Se la pagina attuale mostra
-già bene il risultato, o non c'è nulla di utile da aggiungere, restituisci un
-elenco vuoto: è l'esito corretto e atteso nella maggior parte dei casi. Se
-decidi di aggiungere qualcosa, massimo 2 azioni.
+REGOLE
+1. Usa SOLO i selettori dell'elenco fornito ADESSO. Non inventarne mai uno,
+   e non riusare un selettore già tra le azioni GIÀ ESEGUITE.
+2. L'ordine delle sezioni è un suggerimento, non un vincolo: se il
+   contenuto della sezione più importante non è ancora visibile ma un
+   elemento visibile (es. un link di navigazione legato a una sezione
+   successiva) permette di raggiungerlo, scegli PRIMA quel click — è un
+   passo strumentale valido, non un motivo per restituire null. Restituisci
+   null SOLO se nessun percorso reale, nemmeno indiretto, porta a nessuna
+   sezione dell'outline.
+3. Se scegli di aprire un pannello/menu/filtro, fermati lì per questo
+   passo: nel turno successivo vedrai per davvero cosa contiene (se
+   qualcosa è comparso) e potrai scegliere se selezionare un'opzione reale
+   al suo interno o lasciarlo così com'è — non decidere ora cosa fare dopo,
+   non lo sai ancora.
+4. "fill" va scelto per il campo, il "click" collegato che lo invia è
+   sempre un passo successivo separato, mai lo stesso. "drag" (mai "click")
+   per gli slider; targetPercent è relativo (0-100), non un valore
+   assoluto. Per uno slider che filtra/restringe un elenco (es. un budget
+   massimo), evita gli estremi (vicino a 0 o a 100): rischiano di azzerare
+   i risultati, mostrando uno stato vuoto invece dell'elenco filtrato che
+   la sezione vuole dimostrare. Preferisci un valore intermedio
+   (indicativamente 40-70), salvo che l'outline chieda esplicitamente di
+   mostrare un limite o uno stato vuoto.
+5. Dopo un'azione che cambia un elenco di risultati (drag su uno slider di
+   prezzo, fill+invio di una ricerca, click su un'opzione di
+   ordinamento/filtro), l'elenco di elementi che ricevi nel turno
+   successivo riflette GIÀ quel cambiamento: solo allora, guardando quel
+   nuovo elenco (mai presumendolo), puoi scegliere un elemento specifico al
+   suo interno (es. aprire un prodotto).
+6. "scroll" solo se il messaggio "Contenuto sotto la piega" conferma che
+   c'è davvero altro da vedere — mai altrimenti.
+7. Non scegliere mai un'azione la cui etichetta sembri distruttiva o
+   irreversibile (elimina, logout, pagamento, invia ordine): in caso di
+   dubbio, restituisci null.
+8. Aggiungi sectionNumber solo se l'azione dimostra chiaramente una sezione
+   dell'outline; omettilo per un'azione solo strumentale (vedi regola 2).
+9. Restituisci null solo quando nessuna azione ulteriore è pertinente: un
+   video statico ma pulito batte interazioni scelte a caso.
+10. Un'azione che avvia un'elaborazione (Genera/Invia/Cerca/Salva...) non
+    richiede alcuna attesa esplicita da parte tua: il sistema attende già
+    automaticamente il risultato prima di interpellarti di nuovo, quindi il
+    turno successivo vedrà già l'esito, non uno stato intermedio.
+11. "wait"/"waitForSelector" non ti servono quasi mai, proprio per il
+    motivo della regola 10: il sistema attende già da solo il risultato di
+    ogni azione prima di richiamarti. Usa "waitForSelector" SOLO nel raro
+    caso di un elemento che potrebbe comparire dopo un'elaborazione
+    insolitamente lenta — mai per un elemento GIÀ presente nell'elenco: se
+    è già lì e visibile, l'interazione giusta è quella vera (click, fill,
+    drag), non un'attesa che non fa avanzare la demo di un solo passo.
 `.trim();
 
 // Il modello linguistico usato da questo agente è condiviso con gli altri
@@ -211,32 +179,54 @@ export function isActionSafe(action, elements) {
     // scartare a prescindere da quanto sembri plausibile.
     return false;
   }
+  // Un elemento con ruolo "slider" (vedi INTERACTIVE_ROLES in
+  // tools/browser/pageInspection.js) si aziona SOLO trascinandolo: un
+  // "click" su di esso non sposta il valore (nessun evento di drag reale
+  // parte da un singolo click) e produce un'interazione che non mostra
+  // alcun cambiamento. La regola 4 del prompt chiede già di usare "drag" e
+  // mai "click" per gli slider, ma qui viene applicata anche come controllo
+  // di codice indipendente — stesso principio già usato sopra per
+  // DANGEROUS_LABEL_PATTERN — perché un'istruzione testuale può non essere
+  // seguita in ogni singolo caso da un modello linguistico, mentre un
+  // controllo deterministico lo è sempre. Per lo stesso motivo, l'inverso
+  // (un'azione "drag" su un elemento che non è uno slider) viene scartato
+  // qui invece di lasciarlo fallire più avanti a registrazione già iniziata
+  // (readSliderRange in tools/browser/humanInteraction.js si aspetta un
+  // vero slider).
+  if (matchedElement.tag === "slider" && action.type !== "drag") {
+    return false;
+  }
+  if (action.type === "drag" && matchedElement.tag !== "slider") {
+    return false;
+  }
   return !DANGEROUS_LABEL_PATTERN.test(matchedElement.label);
 }
 
 // Funzione principale richiamata dal programma che coordina il processo:
 // costruisce le istruzioni da inviare al Director Agent a partire
-// dall'outline e dagli elementi reali della pagina, interpella l'agente e
-// restituisce solo le interazioni che superano il controllo di sicurezza
-// sopra. Non interrompe mai l'esecuzione anche se il risultato è vuoto o
-// parzialmente scartato: restituisce semplicemente un elenco (anche
-// vuoto), coerente con il fatto che un video senza interazioni resta
-// comunque un risultato valido.
+// dall'outline e dagli elementi reali della pagina ADESSO, interpella
+// l'agente per UNA sola azione e la restituisce solo se supera il
+// controllo di sicurezza sopra — altrimenti null, esattamente come quando
+// l'agente stesso decide di non proporre nulla. Non interrompe mai
+// l'esecuzione per una scelta non valida: chi chiama tratta null come "per
+// questo passo non c'è nulla da aggiungere", coerente con il fatto che un
+// video con meno interazioni del previsto resta un risultato accettabile.
 //
-// Quando viene fornito un elenco di interazioni già eseguite in
-// precedenza, significa che l'agente viene interpellato una seconda
-// volta: in quel caso l'elenco di elementi ricevuto descrive lo stato
-// della pagina dopo quelle interazioni, non lo stato iniziale. Questo
-// permette all'agente di scoprire — e usare — un elemento comparso sulla
-// pagina solo in seguito a un'interazione precedente, senza mai dover
-// indovinare un riferimento a un elemento prima che esista realmente.
-export async function planDirectorActions({ outline, elements, previousActions = [], overflow = null }) {
+// Chi chiama è responsabile di ri-osservare per davvero la pagina (nuovo
+// elenco di elementi, nuovo overflow) dopo aver eseguito l'azione
+// restituita, prima di richiamare questa funzione per il passo successivo
+// — mai di dedurre lo stato successivo dal solo tipo di azione appena
+// eseguita. `previousActions` esiste solo per dire all'agente cosa è già
+// stato mostrato (ed evitare selettori ripetuti), non per fargli
+// ricostruire da solo lo stato attuale della pagina: quello arriva sempre
+// da `elements`/`overflow`, misurati di nuovo ogni volta.
+export async function planNextDirectorAction({ outline, elements, previousActions = [], overflow = null }) {
   if (!elements || elements.length === 0) {
     // Se la pagina non ha alcun elemento con cui interagire (una pagina
     // statica, o il cui contenuto non è raggiungibile in questo modo),
     // non ha senso interpellare l'agente: non ci sarebbe comunque nulla
     // tra cui scegliere.
-    return [];
+    return null;
   }
 
   const elementsDescription = elements
@@ -285,31 +275,24 @@ export async function planDirectorActions({ outline, elements, previousActions =
       .map((action, index) => `${index + 1}. ${JSON.stringify(action)}`)
       .join("\n");
     promptParts.push(
-      `Azioni GIÀ ESEGUITE in questa registrazione (non ripeterle, vedi sezione RIPIANIFICAZIONE):\n${previousActionsDescription}`
+      `Azioni GIÀ ESEGUITE nei passi precedenti di questa esplorazione (non ripeterle):\n${previousActionsDescription}`
     );
   }
 
   const prompt = promptParts.join("\n\n");
 
-  const result = await directorAgent.invoke(
+  const result = await invokeAgentWithRetry(
+    directorAgent,
     { messages: [{ role: "user", content: prompt }] },
     { timeout: DIRECTOR_CALL_TIMEOUT_MS }
   );
-  const proposedActions = result.structuredResponse?.actions ?? [];
+  const proposedAction = result.structuredResponse?.action ?? null;
+  if (!proposedAction) return null;
 
-  // Quando si tratta di una seconda interpellazione (vedi sopra), il
-  // numero di interazioni viene comunque limitato a due anche qui nel
-  // codice, non solo tramite le istruzioni date all'agente: questo
-  // secondo turno serve a rifinire il risultato già mostrato, non a
-  // ripartire con una sequenza lunga quanto la prima.
-  const cappedActions = previousActions.length > 0 ? proposedActions.slice(0, 2) : proposedActions;
-
-  // Le interazioni che non superano il controllo di sicurezza vengono
-  // semplicemente escluse, senza interrompere l'intero processo: un video
-  // con meno interazioni del previsto resta un risultato accettabile,
-  // mentre bloccare tutto per una singola scelta non valida dell'agente
-  // non lo sarebbe.
-  return cappedActions.filter((action) => isActionSafe(action, elements));
+  // Un'azione che non supera il controllo di sicurezza viene trattata come
+  // se l'agente non avesse proposto nulla: un solo passo scartato non deve
+  // far fallire l'intera esplorazione.
+  return isActionSafe(proposedAction, elements) ? proposedAction : null;
 }
 
 export default directorAgent;

@@ -59,7 +59,7 @@ test("accetta sempre un'azione di tipo scroll, che non fa riferimento a un eleme
 });
 
 test("accetta un drag su uno slider realmente presente e innocuo", () => {
-  const elements = [{ selector: "role=slider[name=\"Prezzo massimo\"]", label: "Prezzo massimo" }];
+  const elements = [{ selector: "role=slider[name=\"Prezzo massimo\"]", label: "Prezzo massimo", tag: "slider" }];
   const action = { type: "drag", selector: "role=slider[name=\"Prezzo massimo\"]", targetPercent: 40 };
   assert.equal(isActionSafe(action, elements), true);
 });
@@ -67,4 +67,16 @@ test("accetta un drag su uno slider realmente presente e innocuo", () => {
 test("scarta un drag il cui selettore non corrisponde a nessun elemento reale", () => {
   const action = { type: "drag", selector: "role=slider[name=\"Inventato\"]", targetPercent: 40 };
   assert.equal(isActionSafe(action, []), false);
+});
+
+test("scarta un click su uno slider: va trascinato, non cliccato", () => {
+  const elements = [{ selector: "role=slider[name=\"Prezzo massimo\"]", label: "Prezzo massimo", tag: "slider" }];
+  const action = { type: "click", selector: "role=slider[name=\"Prezzo massimo\"]" };
+  assert.equal(isActionSafe(action, elements), false);
+});
+
+test("scarta un drag su un elemento che non è uno slider", () => {
+  const elements = [{ selector: "#apri-menu", label: "Apri menu", tag: "button" }];
+  const action = { type: "drag", selector: "#apri-menu", targetPercent: 40 };
+  assert.equal(isActionSafe(action, elements), false);
 });

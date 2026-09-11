@@ -16,7 +16,6 @@ import path from "node:path";
 import os from "node:os";
 
 import { parseFlags, guessDevServerUrl } from "../tools/projectDetection.js";
-import { CANVAS_FORMATS, CanvasFormatSchema } from "../tools/browser/recordingConfig.js";
 
 // Carica la chiave API da un file nella cartella personale dell'utente
 // (~/.clipdev.env), non dalla cartella dove è installato ClipDev. Questo è
@@ -215,37 +214,6 @@ if (flags.duration) {
   }
 }
 
-// `--realMobile=true` registra con il viewport di un vero dispositivo
-// mobile (vedi MOBILE_DEVICE in tools/browser/recordingConfig.js) invece che
-// a risoluzione desktop, per mostrare il vero layout responsive del sito
-// (menu hamburger, colonne ridotte, ecc.) invece del layout desktop
-// semplicemente ritagliato — che è tutto ciò che fa da solo --canvas
-// square/vertical. Sostituisce del tutto la registrazione desktop in questa
-// esecuzione, quindi non raddoppia il costo (un solo giro di Director Agent
-// + registrazione, come sempre): per avere ENTRAMBI i video servirebbero due
-// esecuzioni separate di `clipdev`.
-const mobileRecording = flags.realMobile === "true";
-
-// `--canvas=widescreen` (default per una registrazione desktop) oppure uno
-// dei formati pensati per il feed mobile (`square`, `vertical`): vedi
-// CANVAS_FORMATS in tools/browser/recordingConfig.js. L'elenco valido nel
-// messaggio d'errore è derivato da lì invece che ripetuto qui a mano, per
-// non rischiare che i due finiscano per divergere quando in futuro si
-// aggiunge un formato. Se non indicato esplicitamente, il valore resta
-// `undefined`: è runClipDevPipeline a scegliere il default giusto in base a
-// `mobileRecording` (una registrazione mobile è già verticale di natura),
-// invece di forzarlo qui a "widescreen" a prescindere.
-let canvasFormat;
-if (flags.canvas !== undefined) {
-  const canvasFormatResult = CanvasFormatSchema.safeParse(flags.canvas);
-  if (!canvasFormatResult.success) {
-    const validFormats = Object.keys(CANVAS_FORMATS).map((format) => `"${format}"`).join(", ");
-    console.error(`--canvas deve essere uno tra ${validFormats} (ricevuto: "${flags.canvas}")`);
-    process.exit(1);
-  }
-  canvasFormat = canvasFormatResult.data;
-}
-
 try {
   console.log(`\nProgetto rilevato: "${projectName}"`);
   console.log(`Registro la demo da: ${url}\n`);
@@ -265,8 +233,6 @@ try {
     url,
     headless,
     minDurationMs,
-    canvasFormat,
-    mobileRecording,
   });
 
   // I percorsi dei file restituiti sono relativi alla cartella del
