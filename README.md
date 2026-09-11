@@ -11,19 +11,19 @@ Per ogni esecuzione, ClipDev crea quattro file:
 | File | Contenuto | Cartella |
 |---|---|---|
 | `<progetto>-outline-<data>.json` | La scaletta della demo: obiettivo, tecnologie usate, sezioni del video (con le callout testuali e i loro timestamp), punti tecnici rilevanti | `output/` |
-| `demo.mp4` | Il video della demo, con cursore visibile, ripple al click, callout testuali sincronizzate e interazioni realistiche, ottimizzato per la durata consigliata da LinkedIn (15-30 secondi). Full HD 16:9 (1920×1080), quadrato 1:1 (1080×1080) o verticale 4:5 (1080×1350), a seconda del formato canvas scelto | `recordings/<slug-progetto>/` |
+| `demo.mp4` | Il video della demo, con cursore visibile, ripple al click, callout testuali sincronizzate, interazioni realistiche e una card di branding finale col nome del progetto, ottimizzato per la durata consigliata da LinkedIn (15-30 secondi). Full HD 16:9 (1920×1080), il formato che LinkedIn raccomanda per il feed desktop | `recordings/<slug-progetto>/` |
 | `<progetto>-variante-a-social-post-<data>.md` | Variante A del post LinkedIn: taglio ingegneristico/storytelling, incentrata su scelte architetturali e tradeoff | `output/` |
-| `<progetto>-variante-b-social-post-<data>.md` | Variante B del post LinkedIn: taglio product showcase, incentrata sull'esperienza utente e su una call-to-action verso il repository | `output/` |
+| `<progetto>-variante-b-social-post-<data>.md` | Variante B del post LinkedIn: taglio product showcase, incentrata sull'esperienza utente e sulla fluidità del prodotto | `output/` |
 
 ## Esempio
 
-Video generato da ClipDev, senza interventi manuali, per **BoolFlix**, un'applicazione React in stile Netflix per cercare film e serie TV con dati in tempo reale dalle TMDB API — esportato in formato quadrato (`--canvas=square`) per il feed mobile:
+Video generato da ClipDev, senza interventi manuali, per **BoolFlix**, un'applicazione React in stile Netflix per cercare film e serie TV con dati in tempo reale dalle TMDB API:
 
 <p align="center">
   <img src="docs/demo.gif" alt="Esempio di video generato da ClipDev">
 </p>
 
-La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale, senza alcun elemento inventato): digitazione di una query nella barra di ricerca, click sul pulsante "Ricerca", apertura della card di un risultato, passaggio alla pagina di dettaglio e scorrimento per mostrarne il resto — con le callout testuali sincronizzate ("Righe scorrevoli Netflix-style", "Ricerca combinata film+TV"...) lette dalla scaletta dell'Analyst Agent e sovrimpresse in fase di montaggio. La GIF sopra è una versione compressa; il video originale in piena qualità (1080×1080) è in [`docs/demo.mp4`](docs/demo.mp4).
+La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale, senza alcun elemento inventato): digitazione di una query nella barra di ricerca, click sul pulsante "Ricerca", apertura della card di un risultato, passaggio alla pagina di dettaglio e scorrimento per mostrarne il resto — con le callout testuali sincronizzate ("Righe scorrevoli Netflix-style", "Ricerca combinata film+TV"...) lette dalla scaletta dell'Analyst Agent e sovrimpresse in fase di montaggio. La GIF sopra è una versione compressa; il video originale in piena qualità è in [`docs/demo.mp4`](docs/demo.mp4) (prodotto con una versione precedente dello strumento, che esportava anche in un canvas quadrato per il feed mobile — vedi [Prossimi sviluppi](#prossimi-sviluppi)).
 
 ## Come funziona
 
@@ -31,19 +31,19 @@ ClipDev non è un unico strumento monolitico, ma una sequenza coordinata di pass
 
 1. **Analisi del progetto** — un agente (Claude Haiku 4.5, tramite LangChain.js) legge la descrizione del progetto (testo libero, README, changelog) e la trasforma in una scaletta strutturata per un video breve, seguendo le linee guida ufficiali di LinkedIn per i contenuti video. Per ogni sezione stima anche, quando può farlo con ragionevole sicurezza, una breve callout testuale (4-5 parole al massimo) con i suoi timestamp indicativi, pensata per essere sovrimpressa nel video in fase di montaggio.
 
-2. **Ispezione della pagina** — in parallelo, Playwright apre un browser Chromium che visita l'indirizzo indicato, attende che la pagina sia completamente caricata (non solo il primo evento di caricamento, ma anche eventuali dati richiesti in modo asincrono all'avvio) e individua gli elementi reali con cui si può interagire (pulsanti, link, campi di input) leggendo lo stesso albero di accessibilità consultato dagli screen reader — non solo i tag HTML più comuni, ma anche i controlli costruiti con componenti custom o incapsulati in una Shadow DOM.
+2. **Ispezione della pagina** — in parallelo, Playwright apre un browser Chromium che visita l'indirizzo indicato, attende che la pagina sia completamente caricata (non solo il primo evento di caricamento, ma anche eventuali dati richiesti in modo asincrono all'avvio) e individua gli elementi reali con cui si può interagire (pulsanti, link, campi di input) leggendo lo stesso albero di accessibilità consultato dagli screen reader — non solo i tag HTML più comuni, ma anche i controlli costruiti con componenti custom o incapsulati in una Shadow DOM. Se la descrizione del progetto cita un'entità con una rotta tipica (un catalogo di prodotti, un blog, un portfolio...), ClipDev verifica anche se quella rotta è realmente raggiungibile e lo segnala in console, solo a scopo diagnostico: la registrazione parte comunque sempre dalla home page, la baseline che il pubblico deve riconoscere nei primi istanti del video.
 
-3. **Pianificazione delle interazioni** — un secondo agente (stesso modello, stesso framework) sceglie quali interazioni mostrare nel video (click, digitazione, scorrimento, trascinamento di cursori/slider), **solo tra gli elementi realmente presenti sulla pagina**: non vengono mai inventati elementi che non esistono.
+3. **Esplorazione** — un secondo agente (stesso modello, stesso framework) risolve l'intera sequenza di interazioni da mostrare nel video PRIMA di avviare la registrazione vera, un passo alla volta: sceglie una singola interazione (**solo tra gli elementi realmente presenti sulla pagina**, mai inventati), quell'interazione viene eseguita per davvero su una pagina di esplorazione usa-e-getta, e solo a quel punto l'agente viene interpellato di nuovo con lo stato reale della pagina risultante — mai un lotto di più azioni decise in anticipo su uno stato che nel frattempo è già cambiato. È lo stesso principio adottato dagli strumenti reali di automazione browser guidata da agenti (il server MCP ufficiale di Microsoft per Playwright, Stagehand di Browserbase): un'azione alla volta, con la pagina ri-osservata per davvero prima di ogni decisione successiva.
 
-4. **Registrazione** — le interazioni scelte vengono eseguite con Playwright nello stesso browser, con un cursore visibile che si muove in modo naturale (non a scatti) e un ripple semitrasparente che si espande a ogni click, per restare leggibile anche su schermi piccoli. Prima di ogni click o digitazione, ClipDev verifica che l'elemento coinvolto sia visibile e abbia smesso di muoversi (utile con menu che si aprono con un'animazione o banner che si spostano durante il caricamento), e sostituisce automaticamente un eventuale valore segnaposto generico ("test", "asdf") con uno semanticamente plausibile prima di digitarlo in un campo. Se un'interazione fa comparire contenuti caricati da un servizio esterno (ad esempio le card di un catalogo prodotti), l'intervallo di attesa viene registrato e rimosso per intero in fase di montaggio (lo stesso "taglio del tempo morto" usato dagli strumenti professionali di registrazione demo), così nel video non compare mai lo stato di caricamento intermedio. Il risultato viene registrato in un video WebM.
+4. **Registrazione** — la sequenza già risolta nella fase di esplorazione viene rieseguita in modo deterministico, senza ulteriori chiamate all'agente, su una pagina fresca dedicata alla registrazione vera e propria, con un cursore visibile che si muove in modo naturale (non a scatti) e un ripple semitrasparente che si espande a ogni click, per restare leggibile anche su schermi piccoli. Prima di ogni click o digitazione, ClipDev verifica che l'elemento coinvolto sia visibile e abbia smesso di muoversi (utile con menu che si aprono con un'animazione o banner che si spostano durante il caricamento), e sostituisce automaticamente un eventuale valore segnaposto generico ("test", "asdf") con uno semanticamente plausibile prima di digitarlo in un campo. Se un'interazione fa comparire contenuti caricati da un servizio esterno (ad esempio le card di un catalogo prodotti), l'intervallo di attesa viene registrato e rimosso per intero in fase di montaggio (lo stesso "taglio del tempo morto" usato dagli strumenti professionali di registrazione demo), così nel video non compare mai lo stato di caricamento intermedio. Se un singolo passo fallisce (un selettore non più valido sulla pagina fresca), viene saltato senza interrompere il resto della sequenza. Il risultato, chiuso da una breve card di branding col nome del progetto, viene registrato in un video WebM.
 
-5. **Montaggio** — il video WebM viene convertito in MP4 con ffmpeg, che in questo stesso passaggio applica anche il taglio del tempo morto, sovrimprime le callout testuali lette dalla scaletta e, se richiesto, incapsula la registrazione in un canvas quadrato o verticale per il feed mobile (vedi [Ottimizzazioni per l'engagement su LinkedIn](#ottimizzazioni-per-lengagement-su-linkedin)).
+5. **Montaggio** — il video WebM viene convertito in MP4 con ffmpeg, che in questo stesso passaggio applica anche il taglio del tempo morto e sovrimprime le callout testuali lette dalla scaletta.
 
 6. **Scrittura del post** — un terzo agente (stesso framework) trasforma la scaletta in due varianti di testo professionale pronte per LinkedIn, entrambe con un gancio nelle prime righe pensato per superare il "vedi altro".
 
 7. **Salvataggio** — scaletta, video e le due varianti del post vengono scritti su disco.
 
-Gli agenti che compiono i passaggi 1, 3 e 6 sono basati su intelligenza artificiale ma **non decidono autonomamente l'ordine delle operazioni**: la sequenza è coordinata da codice deterministico (`pipeline/clipDevPipeline.js`), che gestisce anche i casi di errore, i tempi di attesa e la sicurezza delle interazioni scelte (ad esempio, scarta automaticamente qualunque interazione che sembri distruttiva, come un pulsante di logout o di eliminazione). Ogni dato che attraversa un confine tra un agente e uno strumento — la scaletta, le interazioni pianificate, le callout, il formato canvas, le due varianti del post — viene validato con uno schema [Zod](https://zod.dev/) prima di essere usato, non dato per buono così com'è.
+Gli agenti che compiono i passaggi 1, 3 e 6 sono basati su intelligenza artificiale ma **non decidono autonomamente l'ordine delle operazioni**: la sequenza è coordinata da codice deterministico (`pipeline/clipDevPipeline.js`), che gestisce anche i casi di errore, i tempi di attesa e la sicurezza delle interazioni scelte (ad esempio, scarta automaticamente qualunque interazione che sembri distruttiva, come un pulsante di logout o di eliminazione). Ogni dato che attraversa un confine tra un agente e uno strumento — la scaletta, le interazioni pianificate, le callout, le due varianti del post — viene validato con uno schema [Zod](https://zod.dev/) prima di essere usato, non dato per buono così com'è.
 
 ## Ottimizzazioni per l'engagement su LinkedIn
 
@@ -53,22 +53,34 @@ Queste funzionalità esistono per un motivo preciso: un video e un post pensati 
 
 **Verifica di stabilità prima di ogni interazione** — Prima di calcolare il punto esatto verso cui muovere il cursore, ClipDev attende che l'elemento coinvolto sia visibile e abbia smesso di muoversi o ridimensionarsi (fino a 2 secondi, poi procede comunque con l'ultima posizione osservata). Senza questo controllo, un elemento ancora in transizione per un'animazione CSS o un rendering asincrono potrebbe non trovarsi più nel punto calcolato all'inizio nel momento in cui il click avviene davvero.
 
+**Scorrimento morbido verso elementi fuori vista** — Se l'elemento da cliccare o compilare non è ancora visibile nella parte di pagina inquadrata, ClipDev lo porta in vista scorrendo con la stessa animazione dolce usata per gli scorrimenti espliciti, invece di uno scatto istantaneo. Senza questo accorgimento (difetto osservato concretamente in una registrazione reale) la pagina sembra "saltare" di colpo nel punto esatto in cui avviene il click, un dettaglio che stona in un video pensato per apparire curato.
+
 **Dati realistici nei campi di testo** — Se il valore scelto per un campo da compilare somiglia a un segnaposto palesemente generico ("test", "asdf", "lorem ipsum"...), ClipDev lo sostituisce con un valore plausibile dedotto dal contesto dell'elemento (un campo che sembra un'email riceve un'email vera, un campo di ricerca riceve una query plausibile, e così via): un video professionale non deve mostrare un campo compilato con un valore palesemente finto.
 
 **Callout testuali sincronizzate** — Le pillole di testo semitrasparenti che compaiono nel video ("Filtro budget globale", "Sincronizzazione in tempo reale"...) vengono lette direttamente dalla scaletta prodotta dall'Analyst Agent e sovrimpresse da ffmpeg in fase di montaggio, con una breve dissolvenza in entrata e in uscita. Servono a comunicare cosa sta succedendo a schermo anche a chi guarda senza audio — la maggioranza del pubblico su LinkedIn. Se nessun font grassetto tra quelli noti (vedi [Requisiti](#requisiti)) è disponibile sul sistema, le callout vengono semplicemente saltate: il resto della conversione prosegue comunque.
 
 **Trascinamento di cursori e slider** — Un filtro di prezzo o un selettore di intervallo non si aziona con un click (al più ne apre il pannello) né con la digitazione: va trascinato. ClipDev riconosce questi controlli (`<input type="range">` nativi o slider costruiti con ruolo ARIA `slider`) e li trascina davvero, con lo stesso cursore visibile usato per il resto del video, leggendo dal DOM il valore minimo, massimo e attuale del controllo — non un valore indovinato — per calcolare dove fermarsi. Senza questa capacità, un video su una funzionalità costruita proprio attorno a un filtro del genere potrebbe mostrare al più il pannello che si apre, mai l'effetto del filtro sui risultati.
 
-**Tre formati di canvas** — Il video registrato è di default Full HD 16:9 (lo standard per il feed desktop), ma può essere esportato anche incapsulato in un canvas quadrato 1080×1080 (`--canvas=square`) o verticale 4:5 1080×1350 (`--canvas=vertical`, il formato che LinkedIn privilegia oggi per il feed mobile: occupa quasi tutto lo schermo senza attivare la modalità immersiva a tutto schermo, che nasconderebbe il testo del post e i commenti). In entrambi i casi la viewport registrata non viene semplicemente rimpicciolita (lascerebbe bande vuote sopra e sotto, dato che un fotogramma 16:9 non riempie comunque un canvas più stretto/alto), ma ritagliata al centro per riempire davvero il canvas, con angoli arrotondati, una leggera ombra e uno sfondo scuro minimale attorno.
+**Card di branding finale** — L'ultimo fotogramma del video non è un fermo immagine qualunque: prima di terminare, ClipDev sostituisce la pagina con una card renderizzata dal browser stesso (font e animazione nativi, non disegnati da ffmpeg su un fotogramma congelato) che mostra per un istante il nome del progetto. Nessun elemento cliccabile né invito a iscriversi — quel tipo di "end screen" è pensato per contenuti di minuti su YouTube, non per 15-30 secondi guardati scorrendo il feed: l'unica call-to-action vive nel testo del post/primo commento, mai nel video.
 
-**Registrazione mobile reale (`--realMobile=true`)** — I formati canvas sopra ritagliano comunque lo stesso layout desktop registrato, mostrandone solo la parte centrale: utile, ma non è il vero layout responsive che un utente vedrebbe da telefono (menu hamburger, colonne ridotte, elementi ridisposti). Con `--realMobile=true` la registrazione avviene invece con il viewport di un dispositivo reale (iPhone 13), mostrando il sito così come si adatta davvero a un layout mobile. Sostituisce del tutto la registrazione desktop in quella esecuzione (non produce entrambi i video), quindi non ha un costo aggiuntivo rispetto a una registrazione normale — per avere sia il video desktop sia quello mobile servono due esecuzioni separate.
-
-**Due varianti del post, con un gancio pensato per il "vedi altro"** — Il Copywriter Agent non scrive un solo post, ma due, entrambe basate sugli stessi fatti dell'outline (nessuna invenzione), con angolazioni diverse:
+**Due varianti del post, con un gancio pensato per il "vedi altro" e una chiusura pensata per i commenti** — Il Copywriter Agent non scrive un solo post, ma due, entrambe basate sugli stessi fatti dell'outline (nessuna invenzione), con angolazioni diverse:
 
 - **Variante A — Ingegneristica/Storytelling**: costruita attorno a una scelta architetturale, un tradeoff o una sfida tecnica reale, per un pubblico più tecnico.
-- **Variante B — Product Showcase**: costruita attorno al beneficio per chi usa il prodotto e a una call-to-action verso il repository, per un pubblico più ampio.
+- **Variante B — Product Showcase**: costruita attorno al beneficio per chi usa il prodotto e alla fluidità dell'esperienza mostrata nel video, per un pubblico più ampio.
 
-In entrambe, le prime 1-2 righe (l'unica parte visibile prima del "vedi altro") devono sollevare una sfida tecnica concreta o un insight architetturale reale: sono vietate le formule generiche da annuncio aziendale ("Excited to share", "Oggi vi mostro", "Ho il piacere di presentare") e un uso decorativo delle emoji in apertura.
+In entrambe, le prime 1-2 righe (l'unica parte visibile prima del "vedi altro") devono sollevare una sfida tecnica concreta o un insight architetturale reale: sono vietate le formule generiche da annuncio aziendale ("Excited to share", "Oggi vi mostro", "Ho il piacere di presentare") e un uso decorativo delle emoji in apertura. La chiusura, in entrambe, è altrettanto vincolata: una domanda tecnica aperta che stimoli il dibattito nei commenti (mai generica, tipo "Cosa ne pensate?" senza un aggancio specifico), seguita dall'indicazione che il link al repository si trova nel primo commento — mai un URL scritto direttamente nel testo del post.
+
+## Prossimi sviluppi
+
+ClipDev registra e produce video solo in Full HD 16:9 (1920×1080), il formato che LinkedIn raccomanda per il feed desktop. Il supporto al feed **mobile** — sia l'esportazione in un canvas quadrato/verticale sia la registrazione con il viewport di un vero dispositivo — è stato rimosso temporaneamente per concentrare l'ottimizzazione attuale (cursore, callout, scroll dolce, dati realistici nei campi) solo sul desktop, invece di mantenere una versione mobile parziale e meno curata. Prima di reintrodurlo servirà:
+
+- **Canvas quadrato/verticale per il feed mobile** — ritagliare al centro la registrazione desktop 16:9 e incapsularla in un formato 1:1 o 4:5, con angoli arrotondati e ombra.
+- **Registrazione con un vero viewport mobile** — usare il preset di un dispositivo reale (es. iPhone 13) invece del desktop ritagliato, per mostrare il vero layout responsive (menu hamburger, colonne ridotte).
+- **Cursore in stile "tocco"** — su un vero telefono non esiste un puntatore a freccia: serve un indicatore semitrasparente che si "preme" (una breve riduzione di scala) a ogni interazione, non il cursore desktop.
+- **Scoperta automatica del menu collassato** — su un layout stretto i link di navigazione sono spesso nascosti dietro un bottone hamburger: senza scoprirlo in anticipo, il Director Agent vedrebbe solo 2-3 elementi e nessuna prova di cosa contenga il bottone.
+- **Ritaglio "contain" per il canvas mobile** — una registrazione mobile (quasi 9:16) è proporzionalmente più alta di un canvas square/vertical: lo stesso ritaglio ai lati usato per il desktop taglierebbe sopra e sotto, rischiando di tranciare un titolo o un pulsante.
+- **Scroll proporzionato al viewport reale** — la quantità di scorrimento di un'azione "scroll" va calcolata sull'altezza reale del viewport in uso (664px su iPhone 13, non i 1080px desktop), altrimenti uno scorrimento "large" supererebbe l'intero schermo mobile in un solo scatto.
+- **Dimensione delle callout proporzionata al fotogramma** — un testo pensato per un fotogramma alto 1080px (desktop) risulta microscopico su un fotogramma mobile molto più piccolo in partenza.
 
 ## Stack tecnologico
 
@@ -76,15 +88,15 @@ In entrambe, le prime 1-2 righe (l'unica parte visibile prima del "vedi altro") 
 |---|---|---|
 | Agenti AI | [LangChain.js](https://docs.langchain.com/) v1 (`createAgent`) + Claude Haiku 4.5 (`@langchain/anthropic`) | Analisi del progetto (con callout), scelta delle interazioni, scrittura delle due varianti del post |
 | Automazione browser | [Playwright](https://playwright.dev/) (Chromium) | Navigazione, individuazione degli elementi della pagina, esecuzione delle interazioni, registrazione del video |
-| Validazione dati | [Zod](https://zod.dev/) | Controllo della forma di ogni dato scambiato tra agenti e strumenti (outline, callout, interazioni, formato canvas, percorsi dei file) |
-| Conversione video | ffmpeg (processo esterno) | Conversione del video registrato (WebM) in MP4, taglio del tempo morto, callout testuali, canvas quadrato/verticale |
+| Validazione dati | [Zod](https://zod.dev/) | Controllo della forma di ogni dato scambiato tra agenti e strumenti (outline, callout, interazioni, percorsi dei file) |
+| Conversione video | ffmpeg (processo esterno) | Conversione del video registrato (WebM) in MP4, taglio del tempo morto, callout testuali |
 | Runtime | Node.js, moduli ES nativi | Esecuzione dell'intero processo, nessun framework web coinvolto |
 
 ## Requisiti
 
 - **Node.js** 20.6 o successivo per l'uso da riga di comando con `index.js` (richiede il flag `--env-file`, supportato dalla 20.6); 20.12 o successivo per il comando globale `clipdev` (richiede `process.loadEnvFile()`, l'API nativa equivalente ma con un requisito di versione leggermente più alto)
 - **pnpm** come gestore di pacchetti
-- **ffmpeg** installato e raggiungibile da riga di comando (necessario per convertire il video registrato nel formato finale, tagliare il tempo morto, sovrimprimere le callout e comporre il canvas quadrato/verticale). Su Windows: `winget install ffmpeg`; su macOS: `brew install ffmpeg`; su Linux: `apt install ffmpeg` o equivalente.
+- **ffmpeg** installato e raggiungibile da riga di comando (necessario per convertire il video registrato nel formato finale, tagliare il tempo morto e sovrimprimere le callout). Su Windows: `winget install ffmpeg`; su macOS: `brew install ffmpeg`; su Linux: `apt install ffmpeg` o equivalente.
 - Un **font grassetto di sistema**, solo se si vogliono le callout testuali nel video (facoltativo: senza, il video viene comunque generato correttamente, semplicemente senza callout). ClipDev cerca automaticamente, in ordine, i font più comuni su Windows (`Arial Bold`, `Segoe UI Semibold`), macOS (`Arial Bold`, `Helvetica`) e Linux (`DejaVu Sans Bold`, `Liberation Sans Bold`, `FreeSans Bold`): su un'installazione standard del sistema operativo è quasi sempre già presente, nessuna azione manuale richiesta.
 - Una **chiave API di Anthropic**, ottenibile da [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
 
@@ -127,13 +139,7 @@ oppure, tramite lo script equivalente:
 pnpm start -- "Nome Progetto" "Descrizione tecnica del progetto..." "http://localhost:3000"
 ```
 
-I primi tre parametri sono, nell'ordine: nome del progetto, descrizione tecnica (più è dettagliata, migliore sarà la scaletta prodotta) e indirizzo a cui è raggiungibile il progetto in locale. Un quarto parametro facoltativo sceglie il formato del canvas del video, un quinto attiva la registrazione mobile reale:
-
-```bash
-node --env-file=.env index.js "Nome Progetto" "Descrizione..." "http://localhost:3000" vertical
-```
-
-Formato canvas, valori accettati: `widescreen` (16:9, feed desktop), `square` (1:1) o `vertical` (4:5, il formato che LinkedIn privilegia per il feed mobile — vedi [Ottimizzazioni per l'engagement su LinkedIn](#ottimizzazioni-per-lengagement-su-linkedin)). Se omesso, il default è `widescreen`, a meno che il quinto parametro (registrazione mobile reale) sia `true`, nel qual caso diventa `vertical`.
+I tre parametri sono, nell'ordine: nome del progetto, descrizione tecnica (più è dettagliata, migliore sarà la scaletta prodotta) e indirizzo a cui è raggiungibile il progetto in locale.
 
 ### Come comando globale, dentro un altro progetto
 
@@ -154,7 +160,7 @@ In questa modalità, ClipDev rileva automaticamente il nome del progetto, la sua
 La qualità della scaletta generata dipende direttamente dalla qualità di questa descrizione: un `README.md` che spiega davvero cosa fa il progetto e quali funzionalità offre produce un outline pertinente, mentre un README assente o troppo generico (solo badge, istruzioni di installazione, nessuna descrizione delle funzionalità) lascia l'agente con poco materiale su cui basarsi, con il rischio di una scaletta vaga o poco accurata. In questi casi conviene passare una descrizione più completa con `--summary`, invece di affidarsi al rilevamento automatico.
 
 ```bash
-clipdev --name="Nome Progetto" --summary="Descrizione..." --url="http://localhost:5173" --canvas=vertical
+clipdev --name="Nome Progetto" --summary="Descrizione..." --url="http://localhost:5173"
 ```
 
 Parametri disponibili:
@@ -166,8 +172,6 @@ Parametri disponibili:
 | `--url` | Indirizzo del sito da registrare | rilevato automaticamente |
 | `--headless` | `false` per vedere il browser durante la registrazione | `true` |
 | `--duration` | Durata minima del video, in millisecondi | `5000` |
-| `--canvas` | `widescreen` (16:9), `square` (1:1) o `vertical` (4:5, feed mobile) | `widescreen` (`vertical` se `--realMobile=true`) |
-| `--realMobile` | `true` registra con il viewport di un vero dispositivo mobile (layout responsive reale) invece che a risoluzione desktop | `false` |
 
 Quando usato in questa modalità, la chiave API viene letta da `~/.clipdev.env` (nella cartella personale dell'utente), non dal file `.env` del progetto: crea quel file con lo stesso contenuto mostrato sopra, oppure imposta la variabile d'ambiente in modo permanente con `setx ANTHROPIC_API_KEY "sk-ant-..."` (Windows).
 
@@ -189,8 +193,6 @@ const result = await runClipDevPipeline({
   ],
   headless: true,
   minDurationMs: 8000,
-  canvasFormat: "vertical", // oppure "widescreen" (default) o "square"
-  mobileRecording: false, // true registra con il viewport di un vero dispositivo mobile
 });
 
 console.log(result.socialPostVariantA); // taglio ingegneristico/storytelling
@@ -209,8 +211,9 @@ ClipDev/
 ├── ai/
 │   ├── agents/
 │   │   ├── analystAgent.js     Trasforma la descrizione del progetto in una scaletta con callout
-│   │   ├── directorAgent.js    Sceglie le interazioni da mostrare nel video
-│   │   └── copywriterAgent.js  Scrive le due varianti del post per LinkedIn
+│   │   ├── directorAgent.js    Sceglie, un passo alla volta, la prossima interazione da mostrare
+│   │   ├── copywriterAgent.js  Scrive le due varianti del post per LinkedIn
+│   │   └── invokeWithRetry.js  Ritenta le chiamate agli agenti su un bug noto di LangChain.js o un timeout
 │   └── models/
 │       └── anthropic.js        Crea i modelli Claude condivisi dai tre agenti
 │                                (qui avviene anche il controllo sulla chiave API)
@@ -231,9 +234,10 @@ ClipDev/
     │   │                          scroll, trascinamento di slider, stabilità
     │   │                          dell'elemento, dati realistici)
     │   ├── pageInspection.js     Individua gli elementi con cui interagire sulla pagina
-    │   ├── videoTranscode.js     Converte il video: taglio, callout, canvas quadrato/verticale
-    │   └── recordingConfig.js    Dimensioni video, dispositivo mobile e formati canvas condivisi
-    ├── projectDetection.js    Interpreta i parametri e indovina l'URL del dev server
+    │   ├── videoTranscode.js     Converte il video: taglio del tempo morto, callout testuali
+    │   └── recordingConfig.js    Dimensioni video (Full HD 16:9) condivise
+    ├── projectDetection.js    Interpreta i parametri, indovina l'URL del dev server e la rotta
+    │                            di un'entità citata nei requisiti
     └── saveOutputTool.js      Salva su disco scaletta e post; definisce lo schema
                                  dell'outline (incluse le callout) condiviso con l'Analyst
 ```
@@ -252,19 +256,15 @@ ClipDev/
 
 **Il video non ha le callout testuali** — Nessun font grassetto tra quelli noti (vedi [Requisiti](#requisiti)) è stato trovato sul sistema: il resto del video viene comunque prodotto normalmente, solo senza il testo sovrimpresso. Un messaggio in console lo segnala esplicitamente quando succede.
 
-**"--canvas deve essere uno tra 'widescreen', 'square', 'vertical'"** — Il valore passato al parametro del formato canvas (da riga di comando, o `canvasFormat` se usato come libreria) non è uno di quelli accettati.
-
-**"canvasFormat 'widescreen' non è compatibile con mobileRecording: true"** — `--realMobile=true` (o `mobileRecording: true` come libreria) registra un video verticale di natura: incapsularlo in un canvas 16:9 mostrerebbe solo una fetta minuscola della pagina, quindi la combinazione è rifiutata esplicitamente. Usa `--canvas=square` o `--canvas=vertical`, oppure ometti `--canvas` (il default diventa `vertical` in automatico).
-
 **La scaletta generata è vaga, generica o poco accurata** (solo con `clipdev` globale) — Il progetto non ha un `README.md` che descriva davvero le sue funzionalità, oppure ne è privo del tutto: senza una descrizione tecnica sufficiente, l'agente che genera l'outline ha poco materiale su cui basarsi. Passa una descrizione più dettagliata con `--summary="..."`.
 
 ## Nota sullo sviluppo
 
 L'idea, l'obiettivo del prodotto e le scelte di design (come dev'essere fatto un video demo, cosa deve produrre lo strumento, quali garanzie di sicurezza deve rispettare) sono opera di chi lo ha ideato. Il codice è stato scritto con il supporto di un assistente AI e sottoposto, in seguito, a una revisione tecnica mirata, che ha incluso:
 
-- controllo sistematico della gestione degli errori in ogni modulo (validazione degli input, timeout su ogni chiamata esterna — inclusa l'API di Anthropic —, pulizia delle risorse anche nei percorsi di fallimento);
+- controllo sistematico della gestione degli errori in ogni modulo (validazione degli input, timeout su ogni chiamata esterna — inclusa l'API di Anthropic, con un nuovo tentativo automatico su un bug noto di LangChain.js o su un timeout —, pulizia delle risorse anche nei percorsi di fallimento);
 - verifica dell'architettura scelta a confronto con la documentazione ufficiale di Anthropic e di LangChain.js, per accertare che il tipo di sistema realizzato (un processo coordinato in modo deterministico, non un agente pienamente autonomo) fosse davvero quello più adatto a questo caso d'uso;
-- validazione empirica, con ffmpeg reale, della catena di filtri usata per le callout testuali e per il canvas quadrato (angoli arrotondati, ombra, sfondo), non solo dedotta dalla documentazione;
+- validazione empirica, con ffmpeg reale, della catena di filtri usata per le callout testuali, non solo dedotta dalla documentazione;
 - rimozione del codice non più utilizzato;
 - suddivisione dei file più estesi in moduli con una responsabilità ciascuno, per maggiore chiarezza;
 - riscrittura dei commenti nel codice in linguaggio chiaro e verificabile anche da chi non programma;
