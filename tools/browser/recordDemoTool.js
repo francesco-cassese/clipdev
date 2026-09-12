@@ -791,6 +791,15 @@ export async function finalizeClipDevRecording({
       // per intero il risultato vero prima di chiudersi, non saltare
       // direttamente dall'azione alla chiusura.
       if (brandingText) {
+        // Se resta altro contenuto sotto la piega, un leggero scorrimento
+        // proprio prima della dissolvenza della card suggerisce che il
+        // prodotto non finisce qui, invece di restare fermi sull'ultimo
+        // fotogramma dell'azione. Solo quando la card è davvero richiesta:
+        // senza, non c'è alcuna dissolvenza a cui condurre.
+        const overflow = await getPageOverflowInfo(page);
+        if (overflow.pxBelowFold > 0) {
+          await scrollPageSmooth(page, SCROLL_AMOUNT_PX.small);
+        }
         await showBrandingCard(page, brandingText);
       }
 
