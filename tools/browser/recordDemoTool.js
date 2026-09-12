@@ -601,10 +601,23 @@ export async function runClipDevActionBatch({ page, actions = [], cursorState = 
     // un tempismo che possono non corrispondere all'aspetto reale del sito.
     const waitStartedAt = Date.now();
     await networkTracker.waitForIdle(500, RESULT_WAIT_TIMEOUT_MS);
-    // La sola assenza di richieste di rete in corso non garantisce che le
-    // immagini già richieste abbiano finito di comparire (vedi il commento
-    // di waitForImagesToLoad in tools/browser/pageInspection.js): questa
-    // attesa aggiuntiva viene inclusa nello stesso intervallo tagliato via.
+    // La sola assenza di richieste di rete in corso non basta: un payoff
+    // puramente lato client (es. uno slider che filtra una lista già
+    // caricata, senza alcuna richiesta) risulterebbe "pronto" subito, anche
+    // se il re-render/l'animazione che lo mostra è ancora in corso — stesso
+    // problema, stessa soluzione già usata sopra in inspectClipDevPage:
+    // attendere che il DOM smetta davvero di modificarsi (vedi
+    // waitForDomStability in tools/browser/pageInspection.js) prima di
+    // considerare il tempo morto concluso. Senza questo controllo, il
+    // risultato osservato concretamente era la card di branding finale (vedi
+    // showBrandingCard più sotto) che compariva mentre il payoff era ancora
+    // a metà della propria transizione, invece che a risultato già visibile.
+    await waitForDomStability(page, { timeoutMs: RESULT_WAIT_TIMEOUT_MS });
+    // La sola assenza di richieste di rete in corso non garantisce nemmeno
+    // che le immagini già richieste abbiano finito di comparire (vedi il
+    // commento di waitForImagesToLoad in tools/browser/pageInspection.js):
+    // questa attesa aggiuntiva viene inclusa nello stesso intervallo
+    // tagliato via.
     await waitForImagesToLoad(page);
     const waitEndedAt = Date.now();
     if (recordingStartedAt) {
