@@ -20,6 +20,7 @@ import {
   finalizeClipDevRecording,
   abortClipDevRecording,
   safeCloseBrowser,
+  ACTION_SETTLE_MS,
 } from "../tools/browser/recordDemoTool.js";
 import { extractInteractiveElements, getPageOverflowInfo } from "../tools/browser/pageInspection.js";
 
@@ -153,10 +154,14 @@ export function mapRawTimeToEditedTime(rawSeconds, cutRanges) {
 // finestra non scende mai sotto questo valore.
 const MIN_CALLOUT_DURATION_SECONDS = 1.5;
 // Durata per la callout dell'ultima sezione toccata, che altrimenti non
-// avrebbe un confine naturale (nessuna sezione successiva la delimita):
-// resta visibile per un tempo ragionevole, non per tutto il resto del
-// video.
-const LAST_CALLOUT_DURATION_SECONDS = 8;
+// avrebbe un confine naturale (nessuna sezione successiva la delimita).
+// Vincolata ad ACTION_SETTLE_MS (la pausa garantita dopo l'ultima azione,
+// vedi tools/browser/recordDemoTool.js), non a un numero scelto a parte:
+// finalizeClipDevRecording sostituisce la pagina con la card di branding
+// finale esattamente alla fine di quella pausa, quindi una callout che
+// durasse più a lungo resterebbe sovrimpressa sulla card invece di sparire
+// prima che compaia.
+const LAST_CALLOUT_DURATION_SECONDS = ACTION_SETTLE_MS / 1000;
 
 // Costruisce le callout testuali sincronizzate al momento REALE in cui
 // ciascuna sezione dell'outline è stata effettivamente dimostrata,

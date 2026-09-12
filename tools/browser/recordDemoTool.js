@@ -37,11 +37,15 @@ import {
 } from "./pageInspection.js";
 import { CalloutSchema, transcodeToMp4 } from "./videoTranscode.js";
 
-// Breve pausa dopo l'ultima interazione eseguita, prima di terminare la
-// registrazione: garantisce che il risultato di un'azione (ad esempio un
-// contenuto appena comparso) resti visibile per un momento nel video,
-// invece di sparire nello stesso istante in cui la registrazione si ferma.
-const ACTION_SETTLE_MS = 1_500;
+// Pausa dopo l'ultima interazione eseguita, prima di terminare la
+// registrazione (o di passare alla card di branding finale, vedi
+// showBrandingCard più sotto): garantisce che il risultato di un'azione (ad
+// esempio un contenuto appena comparso) resti visibile abbastanza a lungo
+// nel video, invece di sparire troppo presto. Si aggiunge, non sostituisce,
+// l'attesa di stabilità del DOM già applicata in runClipDevActionBatch:
+// quella copre l'eventuale re-render/animazione, questa lascia il tempo di
+// guardare il risultato già stabile.
+export const ACTION_SETTLE_MS = 4_000;
 
 // Tempo massimo di attesa per il risultato di un'azione che avvia
 // un'elaborazione sul sito mostrato (ad esempio un pulsante che genera un
