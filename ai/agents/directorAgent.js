@@ -99,7 +99,12 @@ REGOLE
    qualcosa è comparso) e potrai scegliere se selezionare un'opzione reale
    al suo interno o lasciarlo così com'è — non decidere ora cosa fare dopo,
    non lo sai ancora.
-4. "fill" va scelto per il campo, il "click" collegato che lo invia è
+4. Su un campo di testo (textbox/searchbox/combobox) non scegliere MAI
+   "click" come passo a sé: "fill" include già il click che lo mette a
+   fuoco, quindi un "click" separato su quello stesso campo non fa
+   avanzare la demo di un solo passo — è un passo sprecato che, per la
+   regola 1, ti impedirà anche di riusarlo dopo per il "fill" vero. Scegli
+   direttamente "fill" per il campo, il "click" collegato che lo invia è
    sempre un passo successivo separato, mai lo stesso. "drag" (mai "click")
    per gli slider; targetPercent è relativo (0-100), non un valore
    assoluto. Per uno slider che filtra/restringe un elenco (es. un budget
