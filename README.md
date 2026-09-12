@@ -23,7 +23,7 @@ Video generato da ClipDev, senza interventi manuali, per **BoolFlix**, un'applic
   <img src="docs/demo.gif" alt="Esempio di video generato da ClipDev">
 </p>
 
-La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale, senza alcun elemento inventato): digitazione di una query nella barra di ricerca, click sul pulsante "Ricerca", apertura della card di un risultato, passaggio alla pagina di dettaglio e scorrimento per mostrarne il resto — con le callout testuali sincronizzate ("Righe scorrevoli Netflix-style", "Ricerca combinata film+TV"...) lette dalla scaletta dell'Analyst Agent e sovrimpresse in fase di montaggio. La GIF sopra è una versione compressa; il video originale in piena qualità è in [`docs/demo.mp4`](docs/demo.mp4) (prodotto con una versione precedente dello strumento, che esportava anche in un canvas quadrato per il feed mobile — vedi [Prossimi sviluppi](#prossimi-sviluppi)).
+La sequenza (scelta autonomamente dal Director Agent osservando la pagina reale, senza alcun elemento inventato): digitazione di una query nella barra di ricerca, click sul pulsante "Ricerca", apertura della card di un risultato in un pannello inline con trama e valutazione, passaggio alla pagina di dettaglio completa con il cast — con le callout testuali sincronizzate ("Ricerca in tempo reale", "Espansione card inline", "Dettaglio film + cast"...) lette dalla scaletta dell'Analyst Agent e sovrimpresse in fase di montaggio, chiusa dalla card di branding finale col nome del progetto. La GIF sopra è una versione compressa; il video originale in piena qualità è in [`docs/demo.mp4`](docs/demo.mp4).
 
 ## Come funziona
 
